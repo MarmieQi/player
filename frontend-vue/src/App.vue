@@ -1978,6 +1978,10 @@ function formatDateOnly(value) {
   }).format(new Date(value))
 }
 
+function formatDotDate(value) {
+  return formatDateOnly(value).replace(/\//g, '.')
+}
+
 function xrayAnalysisDateRange(result) {
   if (!result?.fromTime || !result?.toTime) return '-'
   return `${formatDateOnly(result.fromTime)} - ${formatDateOnly(result.toTime)}`
@@ -2388,7 +2392,7 @@ function toggleAllImportFileSelection(checked) {
           <div class="share-v2-stat-icon"><CalendarDays :size="20" /></div>
           <div>
             <span>首次记录</span>
-            <strong>{{ formatDateTime(selectedShareServer.firstSeenAt) }}</strong>
+            <strong>{{ formatDotDate(selectedShareServer.firstSeenAt) }}</strong>
             <small>最早发现玩家足迹</small>
           </div>
         </article>
@@ -3005,6 +3009,26 @@ function toggleAllImportFileSelection(checked) {
               <span>放置</span>
               <strong>{{ formatNumber(player.placedCount) }}</strong>
               <small>{{ 100 - shareBreakPercent(player) }}%</small>
+            </div>
+            <div class="ranking-v2-mobile-breakdown">
+              <div class="ranking-v2-mobile-values">
+                <span>
+                  破坏 <b>{{ formatNumber(player.brokenCount) }}</b>
+                  <small>{{ shareBreakPercent(player) }}%</small>
+                </span>
+                <span>
+                  放置 <b>{{ formatNumber(player.placedCount) }}</b>
+                  <small>{{ 100 - shareBreakPercent(player) }}%</small>
+                </span>
+              </div>
+              <div
+                class="ranking-v2-mobile-bar"
+                :style="{ '--break-percent': `${shareBreakPercent(player)}%` }"
+                aria-label="破坏与放置占比"
+              >
+                <span class="is-broken"></span>
+                <span class="is-placed"></span>
+              </div>
             </div>
             <div class="ranking-v2-total">
               <span>{{ isActiveRankingShare ? '近期活动' : '总活动' }}</span>

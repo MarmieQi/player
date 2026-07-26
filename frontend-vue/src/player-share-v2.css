@@ -447,7 +447,6 @@
   overflow-wrap: anywhere;
 }
 
-.share-v2-stat-card.is-purple strong { font-size: 16px; letter-spacing: -0.02em; }
 .share-v2-stat-card small { color: var(--share-v2-soft-muted); font-size: 11px; font-weight: 700; }
 
 .share-v2-layout {
@@ -1010,6 +1009,10 @@
   font-size: 20px;
 }
 
+.ranking-v2-mobile-breakdown {
+  display: none;
+}
+
 .ranking-v2-empty {
   margin: 16px 0 0;
   padding: 26px;
@@ -1077,7 +1080,6 @@
   .share-v2-stat-card { min-height: 86px; gap: 8px; padding: 10px; border-radius: 15px; }
   .share-v2-stat-icon { width: 31px; height: 31px; border-radius: 9px; }
   .share-v2-stat-card strong { font-size: 21px; }
-  .share-v2-stat-card.is-purple strong { font-size: 13px; }
   .ranking-v2-leader-stat strong {
     font-size: 21px !important;
     line-height: 1.04;
@@ -1112,11 +1114,70 @@
   .ranking-v2-panel { padding: 17px; }
   .ranking-v2-row {
     grid-template-columns: 36px minmax(0, 1fr) auto;
+    grid-template-rows: auto auto;
     gap: 10px;
     padding: 12px;
   }
-  .ranking-v2-rank { width: 34px; height: 34px; border-radius: 10px; }
+  .ranking-v2-rank {
+    grid-column: 1;
+    grid-row: 1;
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+  }
+  .ranking-v2-player {
+    grid-column: 2;
+    grid-row: 1;
+  }
   .ranking-v2-metric { display: none; }
+  .ranking-v2-mobile-breakdown {
+    min-width: 0;
+    display: grid;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    gap: 7px;
+    padding-top: 2px;
+  }
+  .ranking-v2-mobile-values {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--share-v2-muted);
+    font-size: 10px;
+    font-weight: 800;
+  }
+  .ranking-v2-mobile-values span {
+    min-width: 0;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+  }
+  .ranking-v2-mobile-values b {
+    overflow: hidden;
+    color: var(--share-v2-ink);
+    font-size: 13px;
+    font-weight: 950;
+    font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
+  }
+  .ranking-v2-mobile-values small {
+    color: var(--share-v2-soft-muted);
+    font-size: 9px;
+    font-weight: 850;
+  }
+  .ranking-v2-mobile-bar {
+    width: 100%;
+    height: 6px;
+    display: grid;
+    grid-template-columns: var(--break-percent) minmax(0, 1fr);
+    overflow: hidden;
+    border-radius: 999px;
+    background: #edf1f6;
+  }
+  .ranking-v2-mobile-bar .is-broken { background: #f59b4e; }
+  .ranking-v2-mobile-bar .is-placed { background: #3bd0a6; }
   .ranking-v2-total { grid-column: 3; grid-row: 1; }
   .ranking-v2-total strong { font-size: 18px; }
 }
