@@ -2260,7 +2260,7 @@ function toggleAllImportFileSelection(checked) {
 </script>
 
 <template>
-  <main v-if="isSharePage" class="share-shell">
+  <main v-if="isSharePage" class="share-shell player-share-shell">
     <section v-if="shareLoading" class="share-hero">
       <div class="share-hero-copy">
         <p class="eyebrow">PlayerLogger</p>
@@ -2278,25 +2278,33 @@ function toggleAllImportFileSelection(checked) {
     </section>
 
     <template v-else-if="shareData && selectedShareServer">
-      <section class="share-hero">
+      <section class="share-hero player-share-hero">
         <div class="share-hero-copy">
-          <p class="eyebrow">玩家足迹</p>
+          <div class="share-brand-line">
+            <span class="share-brand-mark"><Blocks :size="16" /></span>
+            <span>PLAYERLOGGER / 玩家足迹</span>
+          </div>
           <h1>{{ shareData.playerName }}</h1>
-          <p>{{ selectedShareServer.serverName }} · 总活动 {{ formatNumber(selectedShareServer.totalCount) }} 次</p>
+          <p class="share-hero-subtitle">一份来自服务器日志的生存活动报告</p>
+          <div class="share-hero-meta">
+            <span class="share-hero-tag">
+              <Layers :size="15" />
+              {{ selectedShareServer.serverName }}
+            </span>
+            <span class="share-hero-tag">
+              <CalendarDays :size="15" />
+              数据截止 {{ shareData.latestLogDate || '-' }}
+            </span>
+            <span class="share-hero-tag share-hero-tag-muted">
+              <Clock :size="15" />
+              {{ shareRemainingText }}
+            </span>
+          </div>
         </div>
-        <div class="share-hero-facts">
-          <div>
-            <span>当前服务器</span>
-            <strong>{{ selectedShareServer.serverName }}</strong>
-          </div>
-          <div>
-            <span>统计数据截止于</span>
-            <strong>{{ shareData.latestLogDate || '-' }}</strong>
-          </div>
-          <div>
-            <span>有效时间</span>
-            <strong>{{ shareRemainingText }}</strong>
-          </div>
+        <div class="share-hero-total">
+          <span>总活动</span>
+          <strong>{{ formatNumber(selectedShareServer.totalCount) }}</strong>
+          <small>次方块行为</small>
         </div>
       </section>
 
@@ -2312,35 +2320,67 @@ function toggleAllImportFileSelection(checked) {
         </button>
       </section>
 
+      <section class="share-kpi-grid" aria-label="核心统计">
+        <article class="share-kpi-card blue">
+          <div class="share-kpi-icon"><Blocks :size="19" /></div>
+          <div class="share-kpi-copy">
+            <span>总活动</span>
+            <strong>{{ formatNumber(selectedShareServer.totalCount) }}</strong>
+            <small>全部方块行为</small>
+          </div>
+        </article>
+        <article class="share-kpi-card orange">
+          <div class="share-kpi-icon"><Hammer :size="19" /></div>
+          <div class="share-kpi-copy">
+            <span>破坏数量</span>
+            <strong>{{ formatNumber(selectedShareServer.brokenCount) }}</strong>
+            <small>挖掘与破坏</small>
+          </div>
+        </article>
+        <article class="share-kpi-card green">
+          <div class="share-kpi-icon"><Layers :size="19" /></div>
+          <div class="share-kpi-copy">
+            <span>放置数量</span>
+            <strong>{{ formatNumber(selectedShareServer.placedCount) }}</strong>
+            <small>建造与放置</small>
+          </div>
+        </article>
+        <article class="share-kpi-card purple">
+          <div class="share-kpi-icon"><CalendarDays :size="19" /></div>
+          <div class="share-kpi-copy">
+            <span>首次记录</span>
+            <strong>{{ formatDateTime(selectedShareServer.firstSeenAt) }}</strong>
+            <small>最早发现玩家足迹</small>
+          </div>
+        </article>
+      </section>
+
       <section class="share-dashboard">
         <aside class="share-side-column">
           <section class="share-panel share-summary-panel">
             <div class="share-section-title">
-              <h2>总体统计</h2>
+              <h2>记录概览</h2>
               <span>{{ selectedShareServer.serverName }}</span>
             </div>
             <div class="share-list">
               <div class="share-row">
-                <span>破坏数量</span>
-                <strong>{{ formatNumber(selectedShareServer.brokenCount) }}</strong>
-              </div>
-              <div class="share-row">
-                <span>放置数量</span>
-                <strong>{{ formatNumber(selectedShareServer.placedCount) }}</strong>
-              </div>
-              <div class="share-row">
-                <span>总活动数量</span>
-                <strong>{{ formatNumber(selectedShareServer.totalCount) }}</strong>
+                <span>当前服务器</span>
+                <strong>{{ selectedShareServer.serverName }}</strong>
               </div>
               <div class="share-row">
                 <span>首次记录时间</span>
                 <strong>{{ formatDateTime(selectedShareServer.firstSeenAt) }}</strong>
               </div>
               <div class="share-row">
-                <span>统计数据截止于</span>
+                <span>数据截止日期</span>
                 <strong>{{ selectedShareServer.latestLogDate || '-' }}</strong>
               </div>
+              <div class="share-row">
+                <span>分享链接</span>
+                <strong>{{ shareRemainingText }}</strong>
+              </div>
             </div>
+            <p class="share-summary-note">切换上方服务器，可以查看不同服务器的独立统计。</p>
           </section>
         </aside>
 

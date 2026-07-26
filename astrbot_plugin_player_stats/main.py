@@ -65,6 +65,11 @@ class PlayerStatsPlugin(Star):
             yield event.plain_result("请输入游戏 ID，例如：/绑定游戏id Steve\n注意：/绑定游戏id 和 Steve 中间要有空格。")
             return
 
+        cooldown_message = await self._rebind_cooldown_message(event)
+        if cooldown_message:
+            yield event.plain_result(cooldown_message)
+            return
+
         check = await self._check_player_exists(game_id)
         if not check["ok"]:
             yield event.plain_result(check["message"])
@@ -72,6 +77,7 @@ class PlayerStatsPlugin(Star):
 
         canonical_game_id = check.get("player_name") or game_id
         await self.put_kv_data(self._binding_key(event), canonical_game_id)
+        await self.put_kv_data(self._last_info_query_key(event), "")
         servers = "、".join(check.get("servers") or [])
         yield event.plain_result(
             f"已绑定游戏 ID：{canonical_game_id}\n"
@@ -93,7 +99,13 @@ class PlayerStatsPlugin(Star):
             )
             return
 
-        yield event.plain_result(await self._query_and_format_all(bound_game_id))
+        message, query_succeeded = await self._query_and_format_all(bound_game_id)
+        if query_succeeded:
+            last_query_key = self._last_info_query_key(event)
+            last_query_at = str(await self.get_kv_data(last_query_key, "") or "").strip()
+            if not last_query_at:
+                await self.put_kv_data(last_query_key, datetime.now(timezone.utc).isoformat())
+        yield event.plain_result(message)
 
     @filter.command("肝帝榜", alias={"排行榜", "方块排行榜"})
     async def player_rankings(self, event: AstrMessageEvent):
@@ -208,23 +220,23 @@ class PlayerStatsPlugin(Star):
         ])
         yield event.plain_result("\n".join(lines))
 
-    async def _query_and_format_all(self, game_id: str) -> str:
+    async def _query_and_format_all(self, game_id: str) -> tuple[str, bool]:
         tasks = [self._fetch_player_stats(game_id, server_id) for server_id, _ in self.SERVERS]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for result in results:
             if isinstance(result, httpx.ConnectError):
-                return "查询失败：统计后端没有连接上，请确认 player-stats 后端正在运行。"
+                return "查询失败：统计后端没有连接上，请确认 player-stats 后端正在运行。", False
             if isinstance(result, httpx.TimeoutException):
-                return "查询失败：统计后端响应超时。"
+                return "查询失败：统计后端响应超时。", False
             if isinstance(result, httpx.HTTPStatusError) and result.response.status_code != 404:
                 logger.warning(f"player stats api error: {result.response.status_code} {result.response.text}")
                 if result.response.status_code == 401:
-                    return "查询失败：统计后端拒绝访问，请在 AstrBot 插件配置里填写插件密钥 api_key。"
-                return f"查询失败：统计后端返回 {result.response.status_code}。"
+                    return "查询失败：统计后端拒绝访问，请在 AstrBot 插件配置里填写插件密钥 api_key。", False
+                return f"查询失败：统计后端返回 {result.response.status_code}。", False
             if isinstance(result, Exception) and not isinstance(result, httpx.HTTPStatusError):
                 logger.exception(f"query player stats failed: {result}")
-                return "查询失败：机器人插件内部错误，请看 AstrBot 日志。"
+                return "查询失败：机器人插件内部错误，请看 AstrBot 日志。", False
 
         lines = [f"玩家：{game_id}"]
         has_data = False
@@ -238,7 +250,7 @@ class PlayerStatsPlugin(Star):
             share_info = await self._create_share_link(game_id)
             if share_info:
                 lines.extend(["", f"详细足迹：{share_info['link']}", f"链接{share_info['ttl_text']}内有效"])
-        return "\n".join(lines)
+        return "\n".join(lines), has_data
 
     async def _query_and_format_rankings(self) -> str:
         limit = self._ranking_limit()
@@ -1290,6 +1302,51 @@ class PlayerStatsPlugin(Star):
     def _binding_key(self, event: AstrMessageEvent) -> str:
         sender_id = event.get_sender_id()
         return f"player_stats_binding:{sender_id}"
+
+    def _last_info_query_key(self, event: AstrMessageEvent) -> str:
+        sender_id = event.get_sender_id()
+        return f"player_stats_last_info_query:{sender_id}"
+
+    async def _rebind_cooldown_message(self, event: AstrMessageEvent) -> str:
+        bound_game_id = str(await self.get_kv_data(self._binding_key(event), "") or "").strip()
+        if not bound_game_id:
+            return ""
+
+        cooldown_hours = self._rebind_cooldown_hours()
+        if cooldown_hours <= 0:
+            return ""
+
+        raw_last_query_at = str(await self.get_kv_data(self._last_info_query_key(event), "") or "").strip()
+        if not raw_last_query_at:
+            return ""
+
+        try:
+            last_query_at = datetime.fromisoformat(raw_last_query_at.replace("Z", "+00:00"))
+        except ValueError:
+            logger.warning(f"invalid player stats query timestamp: {raw_last_query_at}")
+            return ""
+
+        if last_query_at.tzinfo is None:
+            last_query_at = last_query_at.replace(tzinfo=timezone.utc)
+        else:
+            last_query_at = last_query_at.astimezone(timezone.utc)
+
+        remaining_seconds = cooldown_hours * 3600 - (datetime.now(timezone.utc) - last_query_at).total_seconds()
+        if remaining_seconds <= 0:
+            return ""
+
+        remaining_minutes = max(1, int((remaining_seconds + 59) // 60))
+        return (
+            "暂时不能重新绑定游戏 ID。\n"
+            f"当前绑定：{bound_game_id}\n"
+            f"还需等待约 {self._format_duration_minutes(remaining_minutes)} 后可以重新绑定。"
+        )
+
+    def _rebind_cooldown_hours(self) -> int:
+        try:
+            return max(0, min(int(self.config.get("rebind_cooldown_hours", 24)), 8760))
+        except (TypeError, ValueError):
+            return 24
 
     def _normalize_game_id(self, game_id: str | None) -> str:
         normalized = (game_id or "").strip()
