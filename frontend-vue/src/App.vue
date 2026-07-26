@@ -217,15 +217,6 @@ const rankingShareRemainingMs = computed(() => {
   if (!rankingShareData.value?.expiresAt) return 0
   return Math.max(0, new Date(rankingShareData.value.expiresAt).getTime() - shareNow.value)
 })
-const rankingShareRemainingText = computed(() => {
-  if (rankingShareError.value) return '链接已过期'
-  if (!rankingShareData.value?.expiresAt) {
-    return rankingShareData.value?.ttlMinutes ? `链接${durationText(rankingShareData.value.ttlMinutes)}内有效` : '链接有效期内可访问'
-  }
-  const ms = rankingShareRemainingMs.value
-  if (ms <= 0) return '链接已过期'
-  return `${durationText(Math.ceil(ms / 60000))}内有效`
-})
 const rankingShareTitle = computed(() => {
   if (rankingShareData.value?.rankingType === 'active') return '活跃榜'
   return '肝帝榜'
@@ -2291,14 +2282,12 @@ function toggleAllImportFileSelection(checked) {
   <main v-if="isSharePage" class="player-share-v2">
     <section v-if="shareLoading" class="share-v2-state share-v2-state-loading">
       <div class="share-v2-state-mark"><Blocks :size="24" /></div>
-      <p class="share-v2-eyebrow">PLAYERLOGGER / 玩家足迹</p>
       <h1>正在打开足迹</h1>
       <p>正在读取玩家的完整活动报告...</p>
     </section>
 
     <section v-else-if="shareError" class="share-v2-state share-v2-state-error">
       <div class="share-v2-state-mark"><Clock :size="24" /></div>
-      <p class="share-v2-eyebrow">PLAYERLOGGER / 玩家足迹</p>
       <h1>链接已过期</h1>
       <p>{{ shareError }}</p>
     </section>
@@ -2306,11 +2295,7 @@ function toggleAllImportFileSelection(checked) {
     <template v-else-if="shareData && selectedShareServer">
       <header class="share-v2-hero">
         <div class="share-v2-hero-content">
-          <div class="share-v2-brand">
-            <span class="share-v2-brand-mark"><Blocks :size="18" /></span>
-            <span>PLAYERLOGGER <i>/</i> 玩家足迹</span>
-          </div>
-          <p class="share-v2-profile-label">玩家活动档案</p>
+          <p class="share-v2-player-label">玩家活动档案</p>
           <h1>{{ shareData.playerName }}</h1>
           <p class="share-v2-hero-description">生存活动</p>
           <div class="share-v2-hero-meta">
@@ -2355,8 +2340,8 @@ function toggleAllImportFileSelection(checked) {
         <div class="share-v2-server-context">
           <span class="share-v2-context-icon"><Database :size="18" /></span>
           <div>
-            <p>DATA VIEW</p>
-            <strong>服务器记录</strong>
+            <p>SERVER SELECT</p>
+            <strong>切换服务器</strong>
             <small>切换服务器查看独立统计</small>
           </div>
         </div>
@@ -2601,7 +2586,6 @@ function toggleAllImportFileSelection(checked) {
       </section>
 
       <footer class="share-v2-footer">
-        <span><Blocks :size="14" /> PLAYERLOGGER / 玩家足迹</span>
         <span>{{ selectedShareServer.serverName }}</span>
       </footer>
     </template>
@@ -2891,7 +2875,6 @@ function toggleAllImportFileSelection(checked) {
     <section v-if="rankingShareLoading" class="share-v2-state">
       <div class="share-v2-state-mark"><Clock :size="24" /></div>
       <div>
-        <p class="share-v2-eyebrow">PLAYERLOGGER / 排行榜</p>
         <h1>正在打开排行榜</h1>
         <p>正在读取排行数据</p>
       </div>
@@ -2900,50 +2883,40 @@ function toggleAllImportFileSelection(checked) {
     <section v-else-if="rankingShareError" class="share-v2-state share-v2-state-error">
       <div class="share-v2-state-mark"><Clock :size="24" /></div>
       <div>
-        <p class="share-v2-eyebrow">PLAYERLOGGER / 排行榜</p>
         <h1>链接已过期</h1>
         <p>{{ rankingShareError }}</p>
       </div>
     </section>
 
     <template v-else-if="rankingShareData && rankingShareServers.length">
-      <header class="share-v2-hero ranking-v2-hero">
-        <div class="share-v2-hero-content">
-          <div class="share-v2-brand">
-            <span class="share-v2-brand-mark"><Blocks :size="18" /></span>
-            <span>PLAYERLOGGER <i>/</i> 玩家排行</span>
-          </div>
-          <p class="share-v2-profile-label">{{ isActiveRankingShare ? '近期活跃排行' : '服务器活动榜单' }}</p>
-          <h1>{{ rankingShareTitle }}</h1>
-          <p class="share-v2-hero-description">
-            {{ isActiveRankingShare ? `按最近 ${rankingSharePeriodDays || ''} 天的方块活动排序` : '按破坏与放置方块总数排序' }}
-          </p>
-          <div class="share-v2-hero-meta">
-            <span><CalendarDays :size="15" />{{ rankingShareData.fromDate || '-' }} 至 {{ rankingShareData.toDate || '-' }}</span>
-            <span><Clock :size="15" />{{ rankingShareRemainingText }}</span>
-          </div>
-        </div>
-        <div class="share-v2-hero-score ranking-v2-hero-score">
-          <div class="share-v2-score-head">
-            <span class="share-v2-score-label">{{ isActiveRankingShare ? '活跃榜规模' : '榜单规模' }}</span>
-            <span class="share-v2-score-server">{{ selectedRankingShareServer?.serverName }}</span>
-          </div>
-          <strong>Top {{ rankingShareData.limit }}</strong>
-          <span class="share-v2-score-unit">{{ rankingSharePlayers.length }} 名玩家上榜</span>
-          <div class="ranking-v2-leader" v-if="rankingSharePlayers.length">
-            <Crown :size="15" />
-            <span>当前榜首</span>
-            <b>{{ rankingSharePlayers[0].playerName }}</b>
+      <header class="ranking-share-hero">
+        <div class="ranking-share-heading">
+          <div>
+            <span class="ranking-share-server">
+              <Layers :size="14" />
+              {{ selectedRankingShareServer?.serverName }}
+            </span>
+            <h1>{{ rankingShareTitle }}</h1>
+            <p>
+              {{ isActiveRankingShare
+                ? `按最近 ${rankingSharePeriodDays || ''} 天的方块活动排序`
+                : '按破坏与放置方块总数排序' }}
+            </p>
+            <span class="ranking-share-period">
+              <CalendarDays :size="15" />
+              {{ rankingShareData.fromDate || '-' }} 至 {{ rankingShareData.toDate || '-' }}
+            </span>
           </div>
         </div>
       </header>
 
-      <section class="share-v2-server-bar" aria-label="服务器排行">
+      <section class="share-v2-server-bar" aria-label="切换服务器">
         <div class="share-v2-server-context">
           <span class="share-v2-context-icon"><Database :size="18" /></span>
           <div>
-            <p>RANKING VIEW</p>
-            <strong>服务器排行</strong>
+            <p>SERVER SELECT</p>
+            <strong>切换服务器</strong>
+            <small>切换服务器查看独立统计</small>
           </div>
         </div>
         <nav class="share-v2-server-tabs" aria-label="服务器">
@@ -2988,7 +2961,7 @@ function toggleAllImportFileSelection(checked) {
         <article class="share-v2-stat-card is-purple ranking-v2-leader-stat">
           <div class="share-v2-stat-icon"><Crown :size="20" /></div>
           <div>
-            <span>{{ isActiveRankingShare ? '最高活跃' : '榜首活动' }}</span>
+            <span>榜首</span>
             <strong>{{ formatNumber(rankingSharePlayers[0]?.totalCount || 0) }}</strong>
             <small>{{ isActiveRankingShare ? '活跃第一' : '当前榜首' }} {{ rankingSharePlayers[0]?.playerName || '-' }}</small>
           </div>
@@ -3043,7 +3016,6 @@ function toggleAllImportFileSelection(checked) {
       </section>
 
       <footer class="share-v2-footer">
-        <span><Blocks :size="14" /> PLAYERLOGGER / 玩家排行</span>
         <span>{{ selectedRankingShareServer?.serverName }} {{ rankingShareTitle }}</span>
       </footer>
     </template>

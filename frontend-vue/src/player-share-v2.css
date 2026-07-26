@@ -76,7 +76,7 @@
 
 .share-v2-hero {
   position: relative;
-  min-height: 228px;
+  min-height: 210px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(260px, 0.46fr);
   align-items: center;
@@ -111,45 +111,19 @@
 }
 
 .share-v2-hero-content {
+  align-self: start;
   display: grid;
   align-content: center;
   gap: 7px;
+  padding-top: 5px;
 }
 
-.share-v2-brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  width: fit-content;
-  color: #86f0db;
-  font-size: 13px;
-  font-weight: 950;
-  letter-spacing: 0.12em;
-}
-
-.share-v2-brand i {
-  color: rgba(255, 255, 255, 0.36);
-  font-style: normal;
-}
-
-.share-v2-brand-mark {
-  width: 34px;
-  height: 34px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgba(134, 240, 219, 0.34);
-  border-radius: 10px;
-  background: rgba(45, 212, 191, 0.12);
-  box-shadow: inset 0 0 0 5px rgba(45, 212, 191, 0.035);
-}
-
-.share-v2-profile-label {
-  margin: 13px 0 0;
-  color: #9aacc4;
+.share-v2-player-label {
+  margin: 0 0 3px;
+  color: #91a5bd;
   font-size: 10px;
-  font-weight: 950;
-  letter-spacing: 0.14em;
+  font-weight: 900;
+  letter-spacing: 0.08em;
 }
 
 .share-v2-hero h1 {
@@ -192,7 +166,7 @@
 }
 
 .share-v2-hero-score {
-  min-height: 166px;
+  min-height: 154px;
   display: grid;
   align-content: center;
   justify-items: end;
@@ -418,11 +392,11 @@
 
 .share-v2-stat-card {
   min-width: 0;
-  min-height: 122px;
+  min-height: 104px;
   display: flex;
   align-items: flex-start;
   gap: 13px;
-  padding: 18px;
+  padding: 14px;
   border: 1px solid var(--share-v2-border);
   border-radius: 18px;
   background: var(--share-v2-surface);
@@ -817,46 +791,69 @@
   line-height: 1.5;
 }
 
-.ranking-v2-hero {
-  grid-template-columns: minmax(0, 1fr) minmax(275px, 0.42fr);
+.ranking-share-hero {
+  position: relative;
+  overflow: hidden;
+  padding: 30px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 22px;
+  color: #ffffff;
+  background:
+    radial-gradient(circle at 88% 8%, rgba(45, 212, 191, 0.17), transparent 28%),
+    radial-gradient(circle at 12% 115%, rgba(59, 130, 246, 0.2), transparent 34%),
+    #101e34;
+  box-shadow: 0 16px 34px rgba(19, 35, 58, 0.16);
 }
 
-.ranking-v2-hero-score {
-  min-height: 158px;
+.ranking-share-heading {
+  position: relative;
+  z-index: 1;
 }
 
-.ranking-v2-hero-score > strong {
-  font-size: clamp(40px, 4.5vw, 54px);
-}
-
-.ranking-v2-leader {
-  width: 100%;
-  display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr);
+.ranking-share-server {
+  width: fit-content;
+  min-height: 28px;
+  display: inline-flex;
   align-items: center;
   gap: 7px;
-  margin-top: 15px;
-  padding-top: 11px;
-  border-top: 1px solid rgba(210, 232, 246, 0.14);
-  color: #f2c66f;
-  text-align: left;
-}
-
-.ranking-v2-leader span {
-  color: #94a9c1;
+  margin-bottom: 12px;
+  padding: 0 10px;
+  border: 1px solid rgba(174, 195, 220, 0.2);
+  border-radius: 8px;
+  color: #c8d6e7;
+  background: rgba(89, 125, 168, 0.1);
   font-size: 10px;
-  font-weight: 850;
+  font-weight: 900;
 }
 
-.ranking-v2-leader b {
-  min-width: 0;
-  overflow: hidden;
-  color: #ffffff;
-  font-size: 12px;
+.ranking-share-heading h1 {
+  margin: 0;
+  font-size: clamp(40px, 4.5vw, 56px);
   font-weight: 950;
-  text-align: right;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  letter-spacing: -0.06em;
+  line-height: 1;
+}
+
+.ranking-share-heading p {
+  margin: 10px 0 0;
+  color: #a8b8ce;
+  font-size: 13px;
+}
+
+.ranking-share-period {
+  width: fit-content;
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 16px;
+  padding: 0 11px;
+  border: 1px solid rgba(174, 195, 220, 0.2);
+  border-radius: 999px;
+  color: #e4edf7;
+  background: rgba(7, 19, 35, 0.32);
+  font-size: 11px;
+  font-weight: 850;
 }
 
 .ranking-v2-panel {
@@ -1026,6 +1023,21 @@
 .share-v2-footer span { display: inline-flex; align-items: center; gap: 6px; }
 .share-v2-footer span:first-child { color: #6f829b; font-weight: 950; letter-spacing: 0.04em; }
 
+@media (min-width: 721px) {
+  .share-v2-server-bar {
+    min-height: 98px;
+    padding: 16px 18px;
+  }
+
+  .share-v2-server-tabs {
+    padding: 5px;
+  }
+
+  .share-v2-server-tabs button {
+    min-height: 48px;
+  }
+}
+
 @media (max-width: 1080px) {
   .player-share-v2,
   .ranking-share-v2 { width: min(calc(100% - 32px), 940px); }
@@ -1040,13 +1052,21 @@
   }
 }
 
+@media (max-width: 900px) {
+  .share-v2-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .share-v2-stat-card {
+    min-height: 100px;
+  }
+}
+
 @media (max-width: 720px) {
   .player-share-v2,
   .ranking-share-v2 { width: min(calc(100% - 24px), 560px); padding-top: 18px; gap: 13px; }
   .share-v2-hero { grid-template-columns: 1fr; gap: 18px; min-height: 0; padding: 21px 19px; border-radius: 19px; }
-  .share-v2-brand { font-size: 12px; }
-  .share-v2-brand-mark { width: 30px; height: 30px; border-radius: 9px; }
-  .share-v2-profile-label { margin-top: 10px; }
+  .share-v2-hero-content { padding-top: 0; }
   .share-v2-hero h1 { font-size: 43px; }
   .share-v2-hero-score { min-height: 126px; justify-items: start; padding: 16px 18px; text-align: left; }
   .share-v2-hero-score > strong { font-size: 46px; }
@@ -1054,11 +1074,19 @@
   .share-v2-server-bar { grid-template-columns: 1fr; gap: 12px; padding: 13px; border-radius: 16px; }
   .share-v2-server-tabs { width: 100%; }
   .share-v2-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
-  .share-v2-stat-card { min-height: 104px; gap: 9px; padding: 13px; border-radius: 15px; }
+  .share-v2-stat-card { min-height: 86px; gap: 8px; padding: 10px; border-radius: 15px; }
   .share-v2-stat-icon { width: 31px; height: 31px; border-radius: 9px; }
   .share-v2-stat-card strong { font-size: 21px; }
   .share-v2-stat-card.is-purple strong { font-size: 13px; }
-  .share-v2-stat-card small { display: none; }
+  .ranking-v2-leader-stat strong {
+    font-size: 21px !important;
+    line-height: 1.04;
+  }
+  .share-v2-stat-card small {
+    display: block;
+    font-size: 10px;
+    line-height: 1.35;
+  }
   .share-v2-panel { padding: 17px; border-radius: 17px; }
   .share-v2-panel-heading { gap: 12px; padding-bottom: 13px; }
   .share-v2-panel-heading h2 { font-size: 19px; }
@@ -1076,9 +1104,11 @@
   .share-v2-resource-value strong { font-size: 21px; }
   .share-v2-unrecorded { align-items: flex-start; gap: 3px; padding-top: 8px; }
   .share-v2-footer { align-items: flex-start; flex-direction: column; gap: 5px; }
-  .ranking-v2-hero { grid-template-columns: 1fr; }
-  .ranking-v2-hero-score { min-height: 132px; }
-  .ranking-v2-leader b { text-align: left; }
+  .ranking-share-hero { padding: 20px; border-radius: 19px; }
+  .ranking-share-server { min-height: 25px; margin-bottom: 9px; padding: 0 8px; }
+  .ranking-share-heading h1 { font-size: 39px; }
+  .ranking-share-heading p { margin-top: 7px; font-size: 12px; }
+  .ranking-share-period { min-height: 28px; margin-top: 13px; padding: 0 9px; font-size: 10px; }
   .ranking-v2-panel { padding: 17px; }
   .ranking-v2-row {
     grid-template-columns: 36px minmax(0, 1fr) auto;
