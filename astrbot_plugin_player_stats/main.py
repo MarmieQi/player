@@ -81,7 +81,7 @@ class PlayerStatsPlugin(Star):
         servers = "、".join(check.get("servers") or [])
         yield event.plain_result(
             f"已绑定游戏 ID：{canonical_game_id}\n"
-            f"已在服务器中找到：{servers}\n"
+            f"已查询到玩家数据：{servers}\n"
             "之后发送 /我的游戏信息 即可查询。"
         )
 
@@ -281,9 +281,11 @@ class PlayerStatsPlugin(Star):
         if not share_info:
             return "查询失败：无法生成活跃榜链接，请稍后重试。"
 
+        effective_from = share_info.get("from_date") or from_date.isoformat()
+        effective_to = share_info.get("to_date") or to_date.isoformat()
         return "\n".join([
             f"最近 {active_days} 天活跃玩家 Top {limit}",
-            f"统计范围：{from_date.isoformat()} 至 {to_date.isoformat()}",
+            f"统计范围：{effective_from} 至 {effective_to}",
             "按破坏+放置合计排序",
             f"查看排名：{share_info['link']}",
             f"链接{share_info['ttl_text']}内有效",
@@ -478,36 +480,6 @@ class PlayerStatsPlugin(Star):
             response.raise_for_status()
             return response.json()
 
-    async def _fetch_rankings(
-        self,
-        server_id: str,
-        limit: int,
-        from_date_override: str | None = None,
-        to_date_override: str | None = None,
-    ) -> list[dict[str, Any]]:
-        base_url = self._api_base_url()
-        timeout_seconds = float(self.config.get("timeout_seconds", 8))
-        params: dict[str, str] = {
-            "serverId": server_id,
-            "limit": str(limit),
-        }
-
-        from_date = from_date_override or str(self.config.get("from_date", "")).strip()
-        to_date = to_date_override or str(self.config.get("to_date", "")).strip()
-        if from_date:
-            params["from"] = from_date
-        if to_date:
-            params["to"] = to_date
-
-        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-            response = await client.get(
-                f"{base_url}/api/stats/players",
-                params=params,
-                headers=self._auth_headers(),
-            )
-            response.raise_for_status()
-            return response.json()
-
     async def _create_share_link(self, game_id: str) -> dict[str, str]:
         base_url = self._api_base_url()
         share_base_url = self._share_base_url()
@@ -574,10 +546,15 @@ class PlayerStatsPlugin(Star):
                 link = f"{share_base_url}/share/ranking/{token}"
         if not link:
             return {}
-        return {
+        result = {
             "link": link,
             "ttl_text": self._share_ttl_text(data),
         }
+        if data.get("fromDate"):
+            result["from_date"] = str(data["fromDate"])
+        if data.get("toDate"):
+            result["to_date"] = str(data["toDate"])
+        return result
 
     async def _xray_group_sender_loop(self):
         while True:
@@ -904,21 +881,6 @@ class PlayerStatsPlugin(Star):
         if from_date or to_date:
             lines.append(f"统计范围：{from_date or '最早'} 至 {to_date or '最新'}")
 
-        return "\n".join(lines)
-
-    def _format_ranking(self, server_name: str, rows: list[dict[str, Any]]) -> str:
-        if not rows:
-            return f"{server_name}：暂无数据"
-
-        lines = [f"{server_name}："]
-        for index, row in enumerate(rows, start=1):
-            player_name = row.get("playerName") or "-"
-            broken_count = int(row.get("brokenCount", 0))
-            placed_count = int(row.get("placedCount", 0))
-            total_count = int(row.get("totalCount", broken_count + placed_count))
-            lines.append(
-                f"{index}. {player_name} 破坏 {broken_count:,} / 放置 {placed_count:,} / 合计 {total_count:,}"
-            )
         return "\n".join(lines)
 
     def _format_public_log_result(self, server: dict[str, str], data: dict[str, Any]) -> str:

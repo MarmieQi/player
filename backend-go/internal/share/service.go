@@ -53,10 +53,12 @@ type queuedXrayGroupMessage struct {
 }
 
 type ShareTokenResponse struct {
-	Token      string    `json:"token"`
-	SharePath  string    `json:"sharePath"`
-	ExpiresAt  time.Time `json:"expiresAt"`
-	TTLMinutes int       `json:"ttlMinutes"`
+	Token      string        `json:"token"`
+	SharePath  string        `json:"sharePath"`
+	ExpiresAt  time.Time     `json:"expiresAt"`
+	TTLMinutes int           `json:"ttlMinutes"`
+	FromDate   *apitype.Date `json:"fromDate,omitempty"`
+	ToDate     *apitype.Date `json:"toDate,omitempty"`
 }
 
 type PlayerDetailsResponse struct {
@@ -254,6 +256,17 @@ func (s *Service) CreateRankingToken(ctx context.Context, rankingType string, li
 	if err := s.deleteExpiredTokens(ctx); err != nil {
 		return ShareTokenResponse{}, err
 	}
+	availableFrom, availableTo, err := s.rankingAvailableDateRange(ctx)
+	if err != nil {
+		return ShareTokenResponse{}, err
+	}
+	effectiveFrom, effectiveTo := resolveRankingDateRange(
+		normalizedType,
+		from,
+		to,
+		availableFrom,
+		availableTo,
+	)
 
 	now := time.Now().UTC()
 	ttl := s.settings.ShareTTLMinutes(ctx)
@@ -265,11 +278,18 @@ func (s *Service) CreateRankingToken(ctx context.Context, rankingType string, li
 	_, err = s.db.ExecContext(ctx, `
 		insert into ranking_share_tokens (token, ranking_type, limit_count, from_date, to_date, created_at, expires_at)
 		values (?, ?, ?, ?, ?, ?, ?)
-	`, token, normalizedType, limit, dateArg(from), dateArg(to), now, expiresAt)
+	`, token, normalizedType, limit, dateArg(effectiveFrom), dateArg(effectiveTo), now, expiresAt)
 	if err != nil {
 		return ShareTokenResponse{}, err
 	}
-	return ShareTokenResponse{Token: token, SharePath: "/share/ranking/" + token, ExpiresAt: expiresAt, TTLMinutes: ttl}, nil
+	return ShareTokenResponse{
+		Token:      token,
+		SharePath:  "/share/ranking/" + token,
+		ExpiresAt:  expiresAt,
+		TTLMinutes: ttl,
+		FromDate:   apiDatePtr(effectiveFrom),
+		ToDate:     apiDatePtr(effectiveTo),
+	}, nil
 }
 
 func (s *Service) RankingDetails(ctx context.Context, token string) (RankingDetailsResponse, error) {
@@ -277,9 +297,20 @@ func (s *Service) RankingDetails(ctx context.Context, token string) (RankingDeta
 	if err != nil {
 		return RankingDetailsResponse{}, err
 	}
+	availableFrom, availableTo, err := s.rankingAvailableDateRange(ctx)
+	if err != nil {
+		return RankingDetailsResponse{}, err
+	}
+	effectiveFrom, effectiveTo := resolvePersistedRankingDateRange(
+		tokenRow.rankingType,
+		tokenRow.fromDate,
+		tokenRow.toDate,
+		availableFrom,
+		availableTo,
+	)
 	servers := make([]RankingServerResponse, 0)
 	for _, option := range s.stats.ServerOptions() {
-		players, err := s.stats.Players(ctx, option.ServerID, tokenRow.fromDate, tokenRow.toDate, "", tokenRow.limit)
+		players, err := s.stats.Players(ctx, option.ServerID, effectiveFrom, effectiveTo, "", tokenRow.limit)
 		if err != nil {
 			return RankingDetailsResponse{}, err
 		}
@@ -292,12 +323,98 @@ func (s *Service) RankingDetails(ctx context.Context, token string) (RankingDeta
 	return RankingDetailsResponse{
 		RankingType: tokenRow.rankingType,
 		Limit:       tokenRow.limit,
-		FromDate:    apiDatePtr(tokenRow.fromDate),
-		ToDate:      apiDatePtr(tokenRow.toDate),
+		FromDate:    apiDatePtr(effectiveFrom),
+		ToDate:      apiDatePtr(effectiveTo),
 		ExpiresAt:   tokenRow.expiresAt,
 		TTLMinutes:  ttlMinutes(tokenRow.createdAt, tokenRow.expiresAt),
 		Servers:     servers,
 	}, nil
+}
+
+func resolvePersistedRankingDateRange(
+	rankingType string,
+	requestedFrom, requestedTo, availableFrom, availableTo *time.Time,
+) (*time.Time, *time.Time) {
+	if rankingType == "active" && requestedFrom != nil && requestedTo != nil {
+		return requestedFrom, requestedTo
+	}
+	return resolveRankingDateRange(rankingType, requestedFrom, requestedTo, availableFrom, availableTo)
+}
+
+func (s *Service) rankingAvailableDateRange(ctx context.Context) (*time.Time, *time.Time, error) {
+	var earliest, latest sql.NullTime
+	err := s.db.QueryRowContext(ctx, `
+		select min(log_date), max(log_date)
+		from imported_server_log_files
+		where log_date is not null
+	`).Scan(&earliest, &latest)
+	if err != nil {
+		return nil, nil, err
+	}
+	if earliest.Valid && latest.Valid {
+		return datePtr(earliest.Time), datePtr(latest.Time), nil
+	}
+
+	err = s.db.QueryRowContext(ctx, `
+		select min(stat_date), max(stat_date)
+		from player_server_daily_stats
+	`).Scan(&earliest, &latest)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !earliest.Valid || !latest.Valid {
+		return nil, nil, nil
+	}
+	return datePtr(earliest.Time), datePtr(latest.Time), nil
+}
+
+func resolveRankingDateRange(
+	rankingType string,
+	requestedFrom, requestedTo, availableFrom, availableTo *time.Time,
+) (*time.Time, *time.Time) {
+	if rankingType == "active" && availableTo != nil {
+		days := inclusiveDays(requestedFrom, requestedTo)
+		if days <= 0 {
+			days = 7
+		}
+		to := dateOnly(*availableTo)
+		from := to.AddDate(0, 0, -(days - 1))
+		return &from, &to
+	}
+
+	from := requestedFrom
+	to := requestedTo
+	if from == nil {
+		from = availableFrom
+	}
+	if to == nil {
+		to = availableTo
+	}
+	return from, to
+}
+
+func inclusiveDays(from, to *time.Time) int {
+	if from == nil || to == nil {
+		return 0
+	}
+	fromYear, fromMonth, fromDay := from.Date()
+	toYear, toMonth, toDay := to.Date()
+	fromDate := time.Date(fromYear, fromMonth, fromDay, 0, 0, 0, 0, time.UTC)
+	toDate := time.Date(toYear, toMonth, toDay, 0, 0, 0, 0, time.UTC)
+	if toDate.Before(fromDate) {
+		return 0
+	}
+	return int(toDate.Sub(fromDate).Hours()/24) + 1
+}
+
+func datePtr(value time.Time) *time.Time {
+	date := dateOnly(value)
+	return &date
+}
+
+func dateOnly(value time.Time) time.Time {
+	year, month, day := value.Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, value.Location())
 }
 
 func (s *Service) SendXrayToGroup(ctx context.Context, request XrayGroupSendRequest) (XrayGroupSendResponse, error) {

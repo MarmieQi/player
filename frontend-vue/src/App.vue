@@ -12,6 +12,7 @@ import {
   CircleSlash,
   Copy,
   Crosshair,
+  Crown,
   Database,
   Download,
   FileText,
@@ -20,13 +21,16 @@ import {
   LockKeyhole,
   LogOut,
   Play,
+  Pickaxe,
   RefreshCw,
   Search,
   Send,
+  Sprout,
   Eye,
   EyeOff,
   Save,
   Settings,
+  TreePine,
   Trash2,
   XCircle,
   UserRound
@@ -226,6 +230,20 @@ const rankingShareTitle = computed(() => {
   if (rankingShareData.value?.rankingType === 'active') return '活跃榜'
   return '肝帝榜'
 })
+const isActiveRankingShare = computed(() => rankingShareData.value?.rankingType === 'active')
+const rankingSharePeriodDays = computed(() => {
+  if (!rankingShareData.value?.fromDate || !rankingShareData.value?.toDate) return 0
+  const from = new Date(`${rankingShareData.value.fromDate}T00:00:00`)
+  const to = new Date(`${rankingShareData.value.toDate}T00:00:00`)
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return 0
+  return Math.max(1, Math.round((to.getTime() - from.getTime()) / 86400000) + 1)
+})
+const rankingSharePlayers = computed(() => selectedRankingShareServer.value?.players || [])
+const rankingShareTotals = computed(() => rankingSharePlayers.value.reduce((totals, player) => ({
+  brokenCount: totals.brokenCount + Number(player?.brokenCount || 0),
+  placedCount: totals.placedCount + Number(player?.placedCount || 0),
+  totalCount: totals.totalCount + Number(player?.totalCount || 0)
+}), { brokenCount: 0, placedCount: 0, totalCount: 0 }))
 
 const maxDailyTotal = computed(() => {
   const max = Math.max(...daily.value.map((item) => item.totalCount || 0), 0)
@@ -2073,6 +2091,22 @@ function formatNumber(value) {
   return new Intl.NumberFormat('zh-CN').format(value || 0)
 }
 
+function shareBreakPercent(server) {
+  const total = Number(server?.totalCount || 0)
+  const broken = Number(server?.brokenCount || 0)
+  if (!total) return 0
+  return Math.round(Math.min(100, Math.max(0, (broken / total) * 100)))
+}
+
+function shareCountTotal(items) {
+  return asArray(items).reduce((total, item) => total + Number(item?.count || 0), 0)
+}
+
+function cleanShareText(value, fallback = '') {
+  const text = String(value || fallback).trim()
+  return text.replace(/[。！？!?]+$/g, '')
+}
+
 function formatDateTime(value) {
   if (!value) return '-'
   return new Intl.DateTimeFormat('zh-CN', {
@@ -2092,12 +2126,6 @@ function formatShareMoment(value) {
     hour: '2-digit',
     minute: '2-digit'
   }).format(new Date(value)).replace('/', '月').replace(' ', '日 ')
-}
-
-function milestoneValue(item) {
-  if (!item?.firstSeenAt) return item?.missingText || '还没有记录'
-  const seenAt = formatShareMoment(item.firstSeenAt)
-  return item.detail ? `${seenAt} ${item.detail}` : seenAt
 }
 
 function fileSize(value) {
@@ -2260,94 +2288,120 @@ function toggleAllImportFileSelection(checked) {
 </script>
 
 <template>
-  <main v-if="isSharePage" class="share-shell player-share-shell">
-    <section v-if="shareLoading" class="share-hero">
-      <div class="share-hero-copy">
-        <p class="eyebrow">PlayerLogger</p>
-        <h1>正在打开足迹</h1>
-        <p class="share-muted">正在读取玩家详情...</p>
-      </div>
+  <main v-if="isSharePage" class="player-share-v2">
+    <section v-if="shareLoading" class="share-v2-state share-v2-state-loading">
+      <div class="share-v2-state-mark"><Blocks :size="24" /></div>
+      <p class="share-v2-eyebrow">PLAYERLOGGER / 玩家足迹</p>
+      <h1>正在打开足迹</h1>
+      <p>正在读取玩家的完整活动报告...</p>
     </section>
 
-    <section v-else-if="shareError" class="share-hero expired">
-      <div class="share-hero-copy">
-        <p class="eyebrow">PlayerLogger</p>
-        <h1>链接已过期</h1>
-        <p>{{ shareError }}</p>
-      </div>
+    <section v-else-if="shareError" class="share-v2-state share-v2-state-error">
+      <div class="share-v2-state-mark"><Clock :size="24" /></div>
+      <p class="share-v2-eyebrow">PLAYERLOGGER / 玩家足迹</p>
+      <h1>链接已过期</h1>
+      <p>{{ shareError }}</p>
     </section>
 
     <template v-else-if="shareData && selectedShareServer">
-      <section class="share-hero player-share-hero">
-        <div class="share-hero-copy">
-          <div class="share-brand-line">
-            <span class="share-brand-mark"><Blocks :size="16" /></span>
-            <span>PLAYERLOGGER / 玩家足迹</span>
+      <header class="share-v2-hero">
+        <div class="share-v2-hero-content">
+          <div class="share-v2-brand">
+            <span class="share-v2-brand-mark"><Blocks :size="18" /></span>
+            <span>PLAYERLOGGER <i>/</i> 玩家足迹</span>
           </div>
+          <p class="share-v2-profile-label">玩家活动档案</p>
           <h1>{{ shareData.playerName }}</h1>
-          <p class="share-hero-subtitle">一份来自服务器日志的生存活动报告</p>
-          <div class="share-hero-meta">
-            <span class="share-hero-tag">
-              <Layers :size="15" />
-              {{ selectedShareServer.serverName }}
+          <p class="share-v2-hero-description">生存活动</p>
+          <div class="share-v2-hero-meta">
+            <span><Layers :size="15" />{{ selectedShareServer.serverName }}</span>
+            <span><CalendarDays :size="15" />数据截止 {{ selectedShareServer.latestLogDate || shareData.latestLogDate || '-' }}</span>
+            <span><Clock :size="15" />{{ shareRemainingText }}</span>
+          </div>
+        </div>
+        <div class="share-v2-hero-score">
+          <div class="share-v2-score-head">
+            <span class="share-v2-score-label">总活动</span>
+            <span class="share-v2-score-server">{{ selectedShareServer.serverName }}</span>
+          </div>
+          <strong>{{ formatNumber(selectedShareServer.totalCount) }}</strong>
+          <span class="share-v2-score-unit">次方块行为</span>
+          <div
+            class="share-v2-score-bar"
+            :style="{ '--break-percent': `${shareBreakPercent(selectedShareServer)}%` }"
+            aria-label="破坏与放置行为占比"
+          >
+            <span class="is-broken"></span>
+            <span class="is-placed"></span>
+          </div>
+          <div class="share-v2-score-split">
+            <span>
+              <i class="is-broken"></i>
+              破坏
+              <b>{{ shareBreakPercent(selectedShareServer) }}%</b>
+              <small>{{ formatNumber(selectedShareServer.brokenCount) }}</small>
             </span>
-            <span class="share-hero-tag">
-              <CalendarDays :size="15" />
-              数据截止 {{ shareData.latestLogDate || '-' }}
-            </span>
-            <span class="share-hero-tag share-hero-tag-muted">
-              <Clock :size="15" />
-              {{ shareRemainingText }}
+            <span>
+              <i class="is-placed"></i>
+              放置
+              <b>{{ 100 - shareBreakPercent(selectedShareServer) }}%</b>
+              <small>{{ formatNumber(selectedShareServer.placedCount) }}</small>
             </span>
           </div>
         </div>
-        <div class="share-hero-total">
-          <span>总活动</span>
-          <strong>{{ formatNumber(selectedShareServer.totalCount) }}</strong>
-          <small>次方块行为</small>
+      </header>
+
+      <section class="share-v2-server-bar" aria-label="服务器数据">
+        <div class="share-v2-server-context">
+          <span class="share-v2-context-icon"><Database :size="18" /></span>
+          <div>
+            <p>DATA VIEW</p>
+            <strong>服务器记录</strong>
+            <small>切换服务器查看独立统计</small>
+          </div>
         </div>
+        <nav class="share-v2-server-tabs" aria-label="服务器">
+          <button
+            v-for="server in shareServers"
+            :key="server.serverId"
+            type="button"
+            :class="{ active: selectedShareServerId === server.serverId }"
+            @click="selectedShareServerId = server.serverId"
+          >
+            <Layers :size="15" />
+            <span>{{ server.serverName }}</span>
+          </button>
+        </nav>
       </section>
 
-      <section class="share-tabs" aria-label="服务器">
-        <button
-          v-for="server in shareServers"
-          :key="server.serverId"
-          type="button"
-          :class="{ active: selectedShareServerId === server.serverId }"
-          @click="selectedShareServerId = server.serverId"
-        >
-          {{ server.serverName }}
-        </button>
-      </section>
-
-      <section class="share-kpi-grid" aria-label="核心统计">
-        <article class="share-kpi-card blue">
-          <div class="share-kpi-icon"><Blocks :size="19" /></div>
-          <div class="share-kpi-copy">
+      <section class="share-v2-stat-grid" aria-label="核心统计">
+        <article class="share-v2-stat-card is-blue">
+          <div class="share-v2-stat-icon"><Blocks :size="20" /></div>
+          <div>
             <span>总活动</span>
             <strong>{{ formatNumber(selectedShareServer.totalCount) }}</strong>
             <small>全部方块行为</small>
           </div>
         </article>
-        <article class="share-kpi-card orange">
-          <div class="share-kpi-icon"><Hammer :size="19" /></div>
-          <div class="share-kpi-copy">
+        <article class="share-v2-stat-card is-orange">
+          <div class="share-v2-stat-icon"><Hammer :size="20" /></div>
+          <div>
             <span>破坏数量</span>
             <strong>{{ formatNumber(selectedShareServer.brokenCount) }}</strong>
-            <small>挖掘与破坏</small>
+            <small>方块破坏记录</small>
           </div>
         </article>
-        <article class="share-kpi-card green">
-          <div class="share-kpi-icon"><Layers :size="19" /></div>
-          <div class="share-kpi-copy">
+        <article class="share-v2-stat-card is-green">
+          <div class="share-v2-stat-icon"><Layers :size="20" /></div>
+          <div>
             <span>放置数量</span>
             <strong>{{ formatNumber(selectedShareServer.placedCount) }}</strong>
             <small>建造与放置</small>
           </div>
         </article>
-        <article class="share-kpi-card purple">
-          <div class="share-kpi-icon"><CalendarDays :size="19" /></div>
-          <div class="share-kpi-copy">
+        <article class="share-v2-stat-card is-purple">
+          <div class="share-v2-stat-icon"><CalendarDays :size="20" /></div>
+          <div>
             <span>首次记录</span>
             <strong>{{ formatDateTime(selectedShareServer.firstSeenAt) }}</strong>
             <small>最早发现玩家足迹</small>
@@ -2355,96 +2409,201 @@ function toggleAllImportFileSelection(checked) {
         </article>
       </section>
 
-      <section class="share-dashboard">
-        <aside class="share-side-column">
-          <section class="share-panel share-summary-panel">
-            <div class="share-section-title">
-              <h2>记录概览</h2>
-              <span>{{ selectedShareServer.serverName }}</span>
-            </div>
-            <div class="share-list">
-              <div class="share-row">
-                <span>当前服务器</span>
-                <strong>{{ selectedShareServer.serverName }}</strong>
-              </div>
-              <div class="share-row">
-                <span>首次记录时间</span>
-                <strong>{{ formatDateTime(selectedShareServer.firstSeenAt) }}</strong>
-              </div>
-              <div class="share-row">
-                <span>数据截止日期</span>
-                <strong>{{ selectedShareServer.latestLogDate || '-' }}</strong>
-              </div>
-              <div class="share-row">
-                <span>分享链接</span>
-                <strong>{{ shareRemainingText }}</strong>
+      <section class="share-v2-layout">
+        <div class="share-v2-main-column">
+          <section class="share-v2-panel share-v2-milestone-panel">
+            <div class="share-v2-panel-heading">
+              <div>
+                <p class="share-v2-eyebrow">SURVIVAL TIMELINE</p>
+                <h2>生存里程碑</h2>
+                <p>从第一块木头到第一次找到远古残骸，记录每一个关键节点</p>
               </div>
             </div>
-            <p class="share-summary-note">切换上方服务器，可以查看不同服务器的独立统计。</p>
-          </section>
-        </aside>
-
-        <div class="share-main-column">
-          <section class="share-panel">
-            <div class="share-section-title">
-              <h2>生存足迹</h2>
-              <span>{{ selectedShareServer.serverName }}</span>
-            </div>
-            <div class="share-milestone-grid">
-              <div v-for="item in selectedShareServer.milestones" :key="item.type" class="share-milestone-card" :class="{ missing: !item.firstSeenAt }">
-                <div>
+            <div class="share-v2-milestone-grid">
+              <article
+                v-for="item in (selectedShareServer.milestones || [])"
+                :key="item.type"
+                class="share-v2-milestone-card"
+                :class="{ 'is-missing': !item.firstSeenAt }"
+              >
+                <div class="share-v2-milestone-icon">
+                  <CheckCircle2 v-if="item.firstSeenAt" :size="18" />
+                  <CircleSlash v-else :size="18" />
+                </div>
+                <div class="share-v2-milestone-body">
                   <span>{{ item.label }}</span>
-                  <strong>{{ milestoneValue(item) }}</strong>
+                  <strong>{{ item.firstSeenAt ? formatShareMoment(item.firstSeenAt) : cleanShareText(item.missingText, '还没有记录') }}</strong>
+                  <small>{{ item.firstSeenAt ? cleanShareText(item.detail || item.foundText || '已记录', '已记录') : '等待新的日志记录' }}</small>
                 </div>
+                <em>{{ item.firstSeenAt ? '已发现' : '未发现' }}</em>
+              </article>
+            </div>
+          </section>
+
+          <section class="share-v2-panel share-v2-resource-panel share-v2-resource-panel-wide">
+            <div class="share-v2-panel-heading share-v2-resource-heading">
+              <div>
+                <p class="share-v2-eyebrow">资源统计</p>
+                <h2>矿物收获</h2>
+                <p>记录已获取的矿物与尚未发现的资源</p>
+              </div>
+              <div class="share-v2-heading-count">
+                <strong>{{ formatNumber(shareCountTotal(selectedShareServer.ores)) }}</strong>
+                <span>个</span>
+              </div>
+            </div>
+            <div class="share-v2-resource-grid share-v2-resource-featured">
+              <article
+                v-for="ore in (selectedShareServer.ores || []).filter(item => item.count)"
+                :key="ore.type"
+                class="share-v2-resource-item"
+              >
+                <span class="share-v2-resource-icon"><Pickaxe :size="17" /></span>
+                <div class="share-v2-resource-body">
+                  <div class="share-v2-resource-name"><span>{{ ore.label }}</span></div>
+                  <div class="share-v2-resource-value">
+                    <strong>{{ formatNumber(ore.count) }}</strong>
+                  </div>
+                </div>
+              </article>
+            </div>
+            <div
+              v-if="(selectedShareServer.ores || []).some(item => !item.count)"
+              class="share-v2-unrecorded"
+            >
+              <span class="share-v2-unrecorded-label">尚未记录：</span>
+              <div class="share-v2-unrecorded-list">
+                <span>{{ (selectedShareServer.ores || []).filter(item => !item.count).map(item => item.label).join('、') }}</span>
               </div>
             </div>
           </section>
 
-          <div class="share-resource-layout">
-            <section class="share-panel share-resource-panel share-resource-panel-wide">
-              <div class="share-section-title">
-                <h2>矿物收获</h2>
-                <span>你一共挖到了</span>
+          <div class="share-v2-resource-pair">
+            <section class="share-v2-panel share-v2-resource-panel share-v2-resource-panel-wood">
+              <div class="share-v2-panel-heading share-v2-resource-heading">
+                <div>
+                  <p class="share-v2-eyebrow">原木收集</p>
+                  <h2>砍树统计</h2>
+                  <p>不同树木原木的累计获取数量</p>
+                </div>
+                <div class="share-v2-heading-count">
+                  <strong>{{ formatNumber(shareCountTotal(selectedShareServer.woods)) }}</strong>
+                  <span>个</span>
+                </div>
               </div>
-              <div class="share-ore-grid">
-                <div v-for="ore in selectedShareServer.ores" :key="ore.type" class="share-ore-row" :class="{ 'is-zero': !ore.count }">
-                  <span>{{ ore.label }}</span>
-                  <strong>{{ ore.count ? formatNumber(ore.count) : '还没有记录' }}</strong>
-                  <small v-if="ore.count">个</small>
+              <div class="share-v2-resource-grid share-v2-resource-featured">
+                <article
+                  v-for="wood in (selectedShareServer.woods || []).filter(item => item.count)"
+                  :key="wood.type"
+                  class="share-v2-resource-item"
+                >
+                  <span class="share-v2-resource-icon"><TreePine :size="17" /></span>
+                  <div class="share-v2-resource-body">
+                    <div class="share-v2-resource-name"><span>{{ wood.label }}</span></div>
+                    <div class="share-v2-resource-value">
+                      <strong>{{ formatNumber(wood.count) }}</strong>
+                    </div>
+                  </div>
+                </article>
+              </div>
+              <div
+                v-if="(selectedShareServer.woods || []).some(item => !item.count)"
+                class="share-v2-unrecorded"
+              >
+                <span class="share-v2-unrecorded-label">尚未记录：</span>
+                <div class="share-v2-unrecorded-list">
+                  <span>{{ (selectedShareServer.woods || []).filter(item => !item.count).map(item => item.label).join('、') }}</span>
                 </div>
               </div>
             </section>
 
-            <section class="share-panel share-resource-panel">
-              <div class="share-section-title">
-                <h2>砍树统计</h2>
-                <span>你一共砍了</span>
-              </div>
-              <div class="share-ore-grid">
-                <div v-for="wood in (selectedShareServer.woods || [])" :key="wood.type" class="share-ore-row" :class="{ 'is-zero': !wood.count }">
-                  <span>{{ wood.label }}</span>
-                  <strong>{{ wood.count ? formatNumber(wood.count) : '还没有记录' }}</strong>
-                  <small v-if="wood.count">个</small>
+            <section class="share-v2-panel share-v2-resource-panel share-v2-resource-panel-saplings">
+              <div class="share-v2-panel-heading share-v2-resource-heading">
+                <div>
+                  <p class="share-v2-eyebrow">种植记录</p>
+                  <h2>栽树统计</h2>
+                  <p>树苗与菌类的累计放置数量</p>
+                </div>
+                <div class="share-v2-heading-count">
+                  <strong>{{ formatNumber(shareCountTotal(selectedShareServer.saplings)) }}</strong>
+                  <span>棵</span>
                 </div>
               </div>
-            </section>
-
-            <section class="share-panel share-resource-panel">
-              <div class="share-section-title">
-                <h2>栽树统计</h2>
-                <span>你一共种了</span>
+              <div class="share-v2-resource-grid share-v2-resource-featured">
+                <article
+                  v-for="sapling in (selectedShareServer.saplings || []).filter(item => item.count)"
+                  :key="sapling.type"
+                  class="share-v2-resource-item"
+                >
+                  <span class="share-v2-resource-icon"><Sprout :size="17" /></span>
+                  <div class="share-v2-resource-body">
+                    <div class="share-v2-resource-name"><span>{{ sapling.label }}</span></div>
+                    <div class="share-v2-resource-value">
+                      <strong>{{ formatNumber(sapling.count) }}</strong>
+                    </div>
+                  </div>
+                </article>
               </div>
-              <div class="share-ore-grid">
-                <div v-for="sapling in (selectedShareServer.saplings || [])" :key="sapling.type" class="share-ore-row" :class="{ 'is-zero': !sapling.count }">
-                  <span>{{ sapling.label }}</span>
-                  <strong>{{ sapling.count ? formatNumber(sapling.count) : '还没有记录' }}</strong>
-                  <small v-if="sapling.count">棵</small>
+              <div
+                v-if="(selectedShareServer.saplings || []).some(item => !item.count)"
+                class="share-v2-unrecorded"
+              >
+                <span class="share-v2-unrecorded-label">尚未记录：</span>
+                <div class="share-v2-unrecorded-list">
+                  <span>{{ (selectedShareServer.saplings || []).filter(item => !item.count).map(item => item.label).join('、') }}</span>
                 </div>
               </div>
             </section>
           </div>
         </div>
+
+        <aside class="share-v2-aside">
+          <section class="share-v2-panel share-v2-overview-panel">
+            <div class="share-v2-panel-heading share-v2-compact-heading">
+              <div>
+                <p class="share-v2-eyebrow">SERVER SNAPSHOT</p>
+                <h2>记录概览</h2>
+              </div>
+              <span class="share-v2-server-pill">{{ selectedShareServer.serverName }}</span>
+            </div>
+            <div class="share-v2-facts">
+              <div><span>当前服务器</span><strong>{{ selectedShareServer.serverName }}</strong></div>
+              <div><span>首次记录时间</span><strong>{{ formatDateTime(selectedShareServer.firstSeenAt) }}</strong></div>
+              <div><span>数据截止日期</span><strong>{{ selectedShareServer.latestLogDate || shareData.latestLogDate || '-' }}</strong></div>
+              <div><span>分享链接状态</span><strong class="is-valid">{{ shareRemainingText }}</strong></div>
+            </div>
+          </section>
+
+          <section class="share-v2-panel share-v2-coverage-panel">
+            <div class="share-v2-panel-heading share-v2-compact-heading">
+              <div>
+                <p class="share-v2-eyebrow">DATA COVERAGE</p>
+                <h2>数据覆盖</h2>
+              </div>
+              <Database :size="18" />
+            </div>
+            <div class="share-v2-coverage-list">
+              <div><span>生存里程碑</span><strong>{{ (selectedShareServer.milestones || []).length }} 项</strong></div>
+              <div><span>矿物项目</span><strong>{{ (selectedShareServer.ores || []).length }} 项</strong></div>
+              <div><span>树木项目</span><strong>{{ (selectedShareServer.woods || []).length }} 项</strong></div>
+              <div><span>栽树项目</span><strong>{{ (selectedShareServer.saplings || []).length }} 项</strong></div>
+            </div>
+          </section>
+
+          <section class="share-v2-panel share-v2-note-panel">
+            <div class="share-v2-note-icon"><Blocks :size="18" /></div>
+            <div>
+              <strong>这是一份独立服务器报告</strong>
+              <p>切换上方服务器后，所有里程碑、矿物、砍树和栽树数据都会同步切换</p>
+            </div>
+          </section>
+        </aside>
       </section>
+
+      <footer class="share-v2-footer">
+        <span><Blocks :size="14" /> PLAYERLOGGER / 玩家足迹</span>
+        <span>{{ selectedShareServer.serverName }}</span>
+      </footer>
     </template>
   </main>
 
@@ -2728,93 +2887,165 @@ function toggleAllImportFileSelection(checked) {
     </template>
   </main>
 
-  <main v-else-if="isRankingSharePage" class="share-shell">
-    <section v-if="rankingShareLoading" class="share-hero">
-      <div class="share-hero-copy">
-        <p class="eyebrow">PlayerLogger</p>
+  <main v-else-if="isRankingSharePage" class="ranking-share-v2">
+    <section v-if="rankingShareLoading" class="share-v2-state">
+      <div class="share-v2-state-mark"><Clock :size="24" /></div>
+      <div>
+        <p class="share-v2-eyebrow">PLAYERLOGGER / 排行榜</p>
         <h1>正在打开排行榜</h1>
-        <p class="share-muted">正在读取排行数据...</p>
+        <p>正在读取排行数据</p>
       </div>
     </section>
 
-    <section v-else-if="rankingShareError" class="share-hero expired">
-      <div class="share-hero-copy">
-        <p class="eyebrow">PlayerLogger</p>
+    <section v-else-if="rankingShareError" class="share-v2-state share-v2-state-error">
+      <div class="share-v2-state-mark"><Clock :size="24" /></div>
+      <div>
+        <p class="share-v2-eyebrow">PLAYERLOGGER / 排行榜</p>
         <h1>链接已过期</h1>
         <p>{{ rankingShareError }}</p>
       </div>
     </section>
 
     <template v-else-if="rankingShareData && rankingShareServers.length">
-      <section class="share-hero">
-        <div class="share-hero-copy">
-          <p class="eyebrow">{{ rankingShareTitle }}</p>
-          <h1>{{ rankingShareTitle }} Top {{ rankingShareData.limit }}</h1>
-          <p>按破坏+放置合计排序</p>
-        </div>
-        <div class="share-hero-facts">
-          <div>
-            <span>统计范围</span>
-            <strong>{{ rankingShareData.fromDate || '最早' }} 至 {{ rankingShareData.toDate || '最新' }}</strong>
+      <header class="share-v2-hero ranking-v2-hero">
+        <div class="share-v2-hero-content">
+          <div class="share-v2-brand">
+            <span class="share-v2-brand-mark"><Blocks :size="18" /></span>
+            <span>PLAYERLOGGER <i>/</i> 玩家排行</span>
           </div>
-          <div>
-            <span>排名人数</span>
-            <strong>Top {{ rankingShareData.limit }}</strong>
-          </div>
-          <div>
-            <span>有效时间</span>
-            <strong>{{ rankingShareRemainingText }}</strong>
+          <p class="share-v2-profile-label">{{ isActiveRankingShare ? '近期活跃排行' : '服务器活动榜单' }}</p>
+          <h1>{{ rankingShareTitle }}</h1>
+          <p class="share-v2-hero-description">
+            {{ isActiveRankingShare ? `按最近 ${rankingSharePeriodDays || ''} 天的方块活动排序` : '按破坏与放置方块总数排序' }}
+          </p>
+          <div class="share-v2-hero-meta">
+            <span><CalendarDays :size="15" />{{ rankingShareData.fromDate || '-' }} 至 {{ rankingShareData.toDate || '-' }}</span>
+            <span><Clock :size="15" />{{ rankingShareRemainingText }}</span>
           </div>
         </div>
+        <div class="share-v2-hero-score ranking-v2-hero-score">
+          <div class="share-v2-score-head">
+            <span class="share-v2-score-label">{{ isActiveRankingShare ? '活跃榜规模' : '榜单规模' }}</span>
+            <span class="share-v2-score-server">{{ selectedRankingShareServer?.serverName }}</span>
+          </div>
+          <strong>Top {{ rankingShareData.limit }}</strong>
+          <span class="share-v2-score-unit">{{ rankingSharePlayers.length }} 名玩家上榜</span>
+          <div class="ranking-v2-leader" v-if="rankingSharePlayers.length">
+            <Crown :size="15" />
+            <span>当前榜首</span>
+            <b>{{ rankingSharePlayers[0].playerName }}</b>
+          </div>
+        </div>
+      </header>
+
+      <section class="share-v2-server-bar" aria-label="服务器排行">
+        <div class="share-v2-server-context">
+          <span class="share-v2-context-icon"><Database :size="18" /></span>
+          <div>
+            <p>RANKING VIEW</p>
+            <strong>服务器排行</strong>
+          </div>
+        </div>
+        <nav class="share-v2-server-tabs" aria-label="服务器">
+          <button
+            v-for="server in rankingShareServers"
+            :key="server.serverId"
+            type="button"
+            :class="{ active: selectedRankingShareServerId === server.serverId }"
+            @click="selectedRankingShareServerId = server.serverId"
+          >
+            <Layers :size="15" />
+            <span>{{ server.serverName }}</span>
+          </button>
+        </nav>
       </section>
 
-      <section class="share-tabs" aria-label="服务器">
-        <button
-          v-for="server in rankingShareServers"
-          :key="server.serverId"
-          type="button"
-          :class="{ active: selectedRankingShareServerId === server.serverId }"
-          @click="selectedRankingShareServerId = server.serverId"
-        >
-          {{ server.serverName }}
-        </button>
-      </section>
-
-      <section class="share-dashboard">
-        <article class="share-panel wide-panel">
-          <div class="share-section-title">
-            <h2>{{ selectedRankingShareServer?.serverName || '' }}</h2>
-            <span>{{ selectedRankingShareServer?.players?.length || 0 }} 名玩家</span>
+      <section class="share-v2-stat-grid" aria-label="榜单统计">
+        <article class="share-v2-stat-card is-blue">
+          <div class="share-v2-stat-icon"><UserRound :size="20" /></div>
+          <div>
+            <span>展示人数</span>
+            <strong>{{ rankingShareData.limit }}</strong>
+            <small>展示排名前 {{ rankingShareData.limit }} 名玩家</small>
           </div>
-          <div v-if="selectedRankingShareServer?.players?.length" class="ranking-card-grid">
-            <div
-              v-for="(player, index) in selectedRankingShareServer.players"
-              :key="player.playerName"
-              class="ranking-card"
-            >
-              <div class="ranking-card-head">
-                <span class="ranking-card-rank">#{{ index + 1 }}</span>
-                <span class="ranking-card-name">{{ player.playerName }}</span>
-              </div>
-              <div class="ranking-card-stats">
-                <div class="ranking-card-stat">
-                  <span>破坏</span>
-                  <strong>{{ formatNumber(player.brokenCount) }}</strong>
-                </div>
-                <div class="ranking-card-stat">
-                  <span>放置</span>
-                  <strong>{{ formatNumber(player.placedCount) }}</strong>
-                </div>
-                <div class="ranking-card-stat">
-                  <span>合计</span>
-                  <strong>{{ formatNumber(player.totalCount) }}</strong>
-                </div>
-              </div>
-            </div>
+        </article>
+        <article class="share-v2-stat-card is-orange">
+          <div class="share-v2-stat-icon"><Hammer :size="20" /></div>
+          <div>
+            <span>{{ isActiveRankingShare ? '期间破坏' : '累计破坏' }}</span>
+            <strong>{{ formatNumber(rankingShareTotals.brokenCount) }}</strong>
+            <small>{{ isActiveRankingShare ? '统计周期内合计' : '上榜玩家合计' }}</small>
           </div>
-          <p v-else class="empty">该服务器暂无数据</p>
+        </article>
+        <article class="share-v2-stat-card is-green">
+          <div class="share-v2-stat-icon"><Layers :size="20" /></div>
+          <div>
+            <span>{{ isActiveRankingShare ? '期间放置' : '累计放置' }}</span>
+            <strong>{{ formatNumber(rankingShareTotals.placedCount) }}</strong>
+            <small>{{ isActiveRankingShare ? '统计周期内合计' : '上榜玩家合计' }}</small>
+          </div>
+        </article>
+        <article class="share-v2-stat-card is-purple ranking-v2-leader-stat">
+          <div class="share-v2-stat-icon"><Crown :size="20" /></div>
+          <div>
+            <span>{{ isActiveRankingShare ? '最高活跃' : '榜首活动' }}</span>
+            <strong>{{ formatNumber(rankingSharePlayers[0]?.totalCount || 0) }}</strong>
+            <small>{{ isActiveRankingShare ? '活跃第一' : '当前榜首' }} {{ rankingSharePlayers[0]?.playerName || '-' }}</small>
+          </div>
         </article>
       </section>
+
+      <section class="share-v2-panel ranking-v2-panel">
+        <div class="share-v2-panel-heading">
+          <div>
+            <p class="share-v2-eyebrow">{{ isActiveRankingShare ? '近期活跃' : '玩家排行' }}</p>
+            <h2>{{ selectedRankingShareServer?.serverName || '' }}{{ rankingShareTitle }}</h2>
+            <p>{{ isActiveRankingShare ? `统计最近 ${rankingSharePeriodDays || ''} 天的破坏与放置行为` : '破坏与放置方块数量越高，排名越靠前' }}</p>
+          </div>
+        </div>
+
+        <div v-if="rankingSharePlayers.length" class="ranking-v2-list">
+          <article
+            v-for="(player, index) in rankingSharePlayers"
+            :key="player.playerName"
+            class="ranking-v2-row"
+            :class="{
+              'is-first': index === 0,
+              'is-second': index === 1,
+              'is-third': index === 2
+            }"
+          >
+            <span class="ranking-v2-rank">
+              <Crown v-if="index === 0" :size="17" />
+              <b v-else>{{ index + 1 }}</b>
+            </span>
+            <div class="ranking-v2-player">
+              <strong>{{ player.playerName }}</strong>
+              <span>第 {{ index + 1 }} 名</span>
+            </div>
+            <div class="ranking-v2-metric is-broken">
+              <span>破坏</span>
+              <strong>{{ formatNumber(player.brokenCount) }}</strong>
+              <small>{{ shareBreakPercent(player) }}%</small>
+            </div>
+            <div class="ranking-v2-metric is-placed">
+              <span>放置</span>
+              <strong>{{ formatNumber(player.placedCount) }}</strong>
+              <small>{{ 100 - shareBreakPercent(player) }}%</small>
+            </div>
+            <div class="ranking-v2-total">
+              <span>{{ isActiveRankingShare ? '近期活动' : '总活动' }}</span>
+              <strong>{{ formatNumber(player.totalCount) }}</strong>
+            </div>
+          </article>
+        </div>
+        <p v-else class="ranking-v2-empty">该服务器暂无排行数据</p>
+      </section>
+
+      <footer class="share-v2-footer">
+        <span><Blocks :size="14" /> PLAYERLOGGER / 玩家排行</span>
+        <span>{{ selectedRankingShareServer?.serverName }} {{ rankingShareTitle }}</span>
+      </footer>
     </template>
   </main>
 
