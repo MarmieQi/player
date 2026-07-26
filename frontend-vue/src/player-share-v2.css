@@ -1022,7 +1022,7 @@
   text-align: center;
 }
 
-.share-v2-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 4px; color: #8c9aae; font-size: 11px; font-weight: 800; }
+.share-v2-footer { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 0 4px; color: #8c9aae; font-size: 11px; font-weight: 800; text-align: right; }
 .share-v2-footer span { display: inline-flex; align-items: center; gap: 6px; }
 .share-v2-footer span:first-child { color: #6f829b; font-weight: 950; letter-spacing: 0.04em; }
 
@@ -1105,7 +1105,7 @@
   .share-v2-resource-body { gap: 4px; }
   .share-v2-resource-value strong { font-size: 21px; }
   .share-v2-unrecorded { align-items: flex-start; gap: 3px; padding-top: 8px; }
-  .share-v2-footer { align-items: flex-start; flex-direction: column; gap: 5px; }
+  .share-v2-footer { align-items: flex-end; flex-direction: column; gap: 5px; }
   .ranking-share-hero { padding: 20px; border-radius: 19px; }
   .ranking-share-server { min-height: 25px; margin-bottom: 9px; padding: 0 8px; }
   .ranking-share-heading h1 { font-size: 39px; }

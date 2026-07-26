@@ -2590,7 +2590,7 @@ function toggleAllImportFileSelection(checked) {
       </section>
 
       <footer class="share-v2-footer">
-        <span>{{ selectedShareServer.serverName }}</span>
+        <span>{{ selectedShareServer.serverName }}·我的游戏信息</span>
       </footer>
     </template>
   </main>
@@ -3040,7 +3040,7 @@ function toggleAllImportFileSelection(checked) {
       </section>
 
       <footer class="share-v2-footer">
-        <span>{{ selectedRankingShareServer?.serverName }} {{ rankingShareTitle }}</span>
+        <span>{{ selectedRankingShareServer?.serverName }}·{{ rankingShareTitle }}</span>
       </footer>
     </template>
   </main>
