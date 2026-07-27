@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -36,6 +37,7 @@ type Config struct {
 	SkipToday           bool
 	MaxFilesPerRun      int
 	XrayRetainedJobs    int
+	XrayTempDirectory   string
 
 	SMBHost      string
 	SMBPort      int
@@ -84,6 +86,7 @@ func Load() Config {
 		SkipToday:           boolEnv("PLAYER_LOGS_IMPORTER_SKIP_TODAY", true),
 		MaxFilesPerRun:      intEnv("PLAYER_LOGS_IMPORTER_MAX_FILES_PER_RUN", 1000),
 		XrayRetainedJobs:    intEnv("PLAYER_LOGS_XRAY_ANALYSIS_RETAINED_JOBS", 1),
+		XrayTempDirectory:   env("PLAYER_LOGS_XRAY_TEMP_DIRECTORY", filepath.Join(os.TempDir(), "player-stats-xray")),
 
 		SMBHost:      env("PLAYER_LOGS_SMB_HOST", ""),
 		SMBPort:      intEnv("PLAYER_LOGS_SMB_PORT", 445),

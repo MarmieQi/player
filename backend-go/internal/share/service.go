@@ -1017,14 +1017,6 @@ func parseShareLocalDateTime(raw string, location *time.Location) (time.Time, bo
 	return time.Time{}, false
 }
 
-func truncate(value string, maxLength int) string {
-	value = strings.TrimSpace(value)
-	if maxLength <= 0 || len(value) <= maxLength {
-		return value
-	}
-	return value[:maxLength]
-}
-
 const (
 	httpStatusBadRequest = 400
 	httpStatusNotFound   = 404

@@ -153,6 +153,7 @@ type XrayAnalysisService struct {
 }
 
 func NewXrayAnalysisService(importer *Service) *XrayAnalysisService {
+	_ = cleanupXrayTempRoot(importer.cfg.XrayTempDirectory)
 	return &XrayAnalysisService{importer: importer, latest: map[string]*xrayState{}, running: map[string]bool{}}
 }
 
@@ -348,7 +349,15 @@ func (s *XrayAnalysisService) run(state *xrayState, source config.Source) {
 		s.running[state.criteria.serverID] = false
 		s.mu.Unlock()
 	}()
-	accumulator := newXrayAccumulator()
+	store, err := newXrayDiskStore(s.importer.cfg.XrayTempDirectory, state.jobID, s.importer.cfg.Location)
+	if err != nil {
+		state.markFailed(err.Error())
+		_ = s.saveState(context.Background(), state)
+		return
+	}
+	defer func() {
+		_ = store.cleanup()
+	}()
 	files, err := s.importer.localFiles(source)
 	if err != nil {
 		state.markFailed(err.Error())
@@ -364,20 +373,31 @@ func (s *XrayAnalysisService) run(state *xrayState, source config.Source) {
 			}
 		}
 		state.markFileStarted(file)
-		rows, err := s.scanXrayFile(file, state.criteria, accumulator)
+		rows, temporaryStorageFailed, err := s.scanXrayFile(file, state.criteria, store)
 		state.addScannedRows(rows)
 		if err != nil {
+			if temporaryStorageFailed {
+				state.markFailed(err.Error())
+				_ = s.saveState(context.Background(), state)
+				return
+			}
 			state.markFileFailed(file, err.Error())
 		}
 	}
-	state.markFinished(accumulator.results())
+	results, err := store.results()
+	if err != nil {
+		state.markFailed(err.Error())
+		_ = s.saveState(context.Background(), state)
+		return
+	}
+	state.markFinished(results)
 	_ = s.saveState(context.Background(), state)
 }
 
-func (s *XrayAnalysisService) scanXrayFile(file RemoteLogFile, criteria xrayCriteria, accumulator *xrayAccumulator) (int64, error) {
+func (s *XrayAnalysisService) scanXrayFile(file RemoteLogFile, criteria xrayCriteria, store *xrayDiskStore) (int64, bool, error) {
 	opened, err := os.Open(file.Path)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	defer opened.Close()
 	scanner := bufio.NewScanner(opened)
@@ -399,9 +419,11 @@ func (s *XrayAnalysisService) scanXrayFile(file RemoteLogFile, criteria xrayCrit
 		if !ok || !criteria.matches(event) {
 			continue
 		}
-		accumulator.accept(event)
+		if err := store.accept(event); err != nil {
+			return scannedRows, true, err
+		}
 	}
-	return scannedRows, scanner.Err()
+	return scannedRows, false, scanner.Err()
 }
 
 type xrayCriteria struct {
@@ -420,39 +442,6 @@ func (c xrayCriteria) matches(event xrayEvent) bool {
 		return false
 	}
 	return c.dimension == "" || strings.TrimSpace(event.row.Dimension2) == c.dimension
-}
-
-type xrayAccumulator struct {
-	players map[string][]xrayEvent
-}
-
-func newXrayAccumulator() *xrayAccumulator {
-	return &xrayAccumulator{players: map[string][]xrayEvent{}}
-}
-
-func (a *xrayAccumulator) accept(event xrayEvent) {
-	a.players[event.playerName] = append(a.players[event.playerName], event)
-}
-
-func (a *xrayAccumulator) results() []XrayPlayerRiskView {
-	results := make([]XrayPlayerRiskView, 0, len(a.players))
-	for playerName, events := range a.players {
-		sort.Slice(events, func(i, j int) bool { return events[i].happenedAt.Before(events[j].happenedAt) })
-		result := analyzePlayer(playerName, events)
-		if result.RiskScore >= 20 || result.AnalysisTrackingEvidenceCount > 0 || result.AnalysisAncientDebrisBreaks >= 3 {
-			results = append(results, result)
-		}
-	}
-	sort.Slice(results, func(i, j int) bool {
-		if results[i].RiskScore != results[j].RiskScore {
-			return results[i].RiskScore > results[j].RiskScore
-		}
-		return results[i].PlayerName < results[j].PlayerName
-	})
-	if len(results) > 200 {
-		return results[:200]
-	}
-	return results
 }
 
 type xrayEvent struct {

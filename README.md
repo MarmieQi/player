@@ -19,7 +19,7 @@ ghcr.io/jmcat999/player-frontend:latest
 mkdir -p /vol1/1000/docker/player
 cd /vol1/1000/docker/player
 curl -fsSL https://raw.githubusercontent.com/jmcat999/player/main/docker-compose.yml -o docker-compose.yml
-mkdir -p docker-data/synced-logs/main docker-data/synced-logs/sub docker-data/mysql
+mkdir -p docker-data/synced-logs/main docker-data/synced-logs/sub docker-data/mysql docker-data/temp
 docker compose pull
 docker compose up -d
 ```
@@ -92,6 +92,7 @@ Docker 会把宿主机目录挂载到容器：
 ./docker-data/synced-logs/main  -> 主服 CSV
 ./docker-data/synced-logs/sub   -> 2服 CSV
 ./docker-data/mysql             -> MySQL 数据
+./docker-data/temp              -> 矿透分析临时文件（任务完成后自动清理）
 ```
 
 CSV 文件名保持插件格式，例如：

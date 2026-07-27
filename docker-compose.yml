@@ -81,6 +81,8 @@ services:
       PLAYER_LOGS_SUB_ENABLED: true
 
       PLAYER_LOGS_LOCAL_DIRECTORY: /data/synced-logs
+      # 矿透分析过程文件。任务完成后自动清理，避免长时间分析占满容器内存。
+      PLAYER_LOGS_XRAY_TEMP_DIRECTORY: /data/temp/xray
 
       # SMB 远程复制。默认关闭，只解析 ./docker-data/synced-logs 里的本地 CSV。
       PLAYER_LOGS_SMB_ENABLED: false
@@ -95,6 +97,7 @@ services:
       PLAYER_LOGS_SMB_RECURSIVE: false
     volumes:
       - ./docker-data/synced-logs:/data/synced-logs
+      - ./docker-data/temp:/data/temp
     expose:
       - "8080"
 

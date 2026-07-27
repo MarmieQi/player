@@ -113,11 +113,6 @@ type PlayerServerStatsResponse struct {
 	LatestImportedAt *time.Time             `json:"latestImportedAt"`
 }
 
-type dateRange struct {
-	From *time.Time
-	To   *time.Time
-}
-
 func (s *Service) Overview(ctx context.Context, serverID string, from, to *time.Time) (OverviewResponse, error) {
 	serverID = normalizeServerID(serverID)
 	where, args := dailyWhere(serverID, from, to, "")
