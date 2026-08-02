@@ -183,7 +183,7 @@ const minecraftServers = Object.freeze({
 function minecraftJoinUrl(serverName) {
   const server = minecraftServers[serverName]
   if (!server) return '#'
-  return `minecraft:?addExternalServer=${encodeURIComponent(server.name)}|${server.host}:${server.port}`
+  return `minecraft://?addExternalServer=${encodeURIComponent(server.name)}|${server.host}:${server.port}`
 }
 const shareMinecraftJoinUrl = computed(() => minecraftJoinUrl(selectedShareServer.value?.serverName))
 const xraySharePlayer = computed(() => xrayShareData.value?.player || null)
