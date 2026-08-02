@@ -87,6 +87,7 @@ const rankingShareData = ref(null)
 const rankingShareLoading = ref(false)
 const rankingShareError = ref('')
 const selectedRankingShareServerId = ref('')
+const minecraftLaunchNoticeOpen = ref(false)
 const shareNow = ref(Date.now())
 const lastOperation = ref(null)
 const importFiles = ref([])
@@ -175,6 +176,16 @@ const selectedShareServer = computed(() => {
   if (!shareServers.value.length) return null
   return shareServers.value.find((server) => server.serverId === selectedShareServerId.value) || shareServers.value[0]
 })
+const minecraftServers = Object.freeze({
+  '主服': { name: 'cat', host: 'cat66.cn', port: 19132 },
+  '2服': { name: 'cat生电服', host: 'cat66.cn', port: 19134 }
+})
+function minecraftJoinUrl(serverName) {
+  const server = minecraftServers[serverName]
+  if (!server) return '#'
+  return `minecraft:?addExternalServer=${encodeURIComponent(server.name)}|${server.host}:${server.port}`
+}
+const shareMinecraftJoinUrl = computed(() => minecraftJoinUrl(selectedShareServer.value?.serverName))
 const xraySharePlayer = computed(() => xrayShareData.value?.player || null)
 const shareRemainingMs = computed(() => {
   if (!shareData.value?.expiresAt) return 0
@@ -213,6 +224,7 @@ const selectedRankingShareServer = computed(() => {
   if (!rankingShareServers.value.length) return null
   return rankingShareServers.value.find((s) => s.serverId === selectedRankingShareServerId.value) || rankingShareServers.value[0]
 })
+const rankingMinecraftJoinUrl = computed(() => minecraftJoinUrl(selectedRankingShareServer.value?.serverName))
 const rankingShareRemainingMs = computed(() => {
   if (!rankingShareData.value?.expiresAt) return 0
   return Math.max(0, new Date(rankingShareData.value.expiresAt).getTime() - shareNow.value)
@@ -2341,14 +2353,18 @@ function toggleAllImportFileSelection(checked) {
       </header>
 
       <section class="share-v2-server-bar" aria-label="服务器数据">
-        <div class="share-v2-server-context">
+        <a
+          class="share-v2-server-context"
+          :href="shareMinecraftJoinUrl"
+          @click="minecraftLaunchNoticeOpen = true"
+        >
           <span class="share-v2-context-icon"><Database :size="18" /></span>
           <div>
-            <p>SERVER SELECT</p>
-            <strong>切换服务器</strong>
-            <small>切换服务器查看独立统计</small>
+            <p>MINECRAFT</p>
+            <strong>{{ selectedShareServer.serverName }}</strong>
+            <small>点击启动游戏</small>
           </div>
-        </div>
+        </a>
         <nav class="share-v2-server-tabs" aria-label="服务器">
           <button
             v-for="server in shareServers"
@@ -2915,14 +2931,18 @@ function toggleAllImportFileSelection(checked) {
       </header>
 
       <section class="share-v2-server-bar" aria-label="切换服务器">
-        <div class="share-v2-server-context">
+        <a
+          class="share-v2-server-context"
+          :href="rankingMinecraftJoinUrl"
+          @click="minecraftLaunchNoticeOpen = true"
+        >
           <span class="share-v2-context-icon"><Database :size="18" /></span>
           <div>
-            <p>SERVER SELECT</p>
-            <strong>切换服务器</strong>
-            <small>切换服务器查看独立统计</small>
+            <p>MINECRAFT</p>
+            <strong>{{ selectedRankingShareServer?.serverName || '-' }}</strong>
+            <small>点击启动游戏</small>
           </div>
-        </div>
+        </a>
         <nav class="share-v2-server-tabs" aria-label="服务器">
           <button
             v-for="server in rankingShareServers"
@@ -4694,4 +4714,25 @@ function toggleAllImportFileSelection(checked) {
     </section>
     </template>
   </main>
+
+  <div
+    v-if="minecraftLaunchNoticeOpen"
+    class="minecraft-launch-backdrop"
+    @click.self="minecraftLaunchNoticeOpen = false"
+  >
+    <section class="minecraft-launch-dialog" role="dialog" aria-modal="true" aria-labelledby="minecraft-launch-title">
+      <div>
+        <h2 id="minecraft-launch-title">启动游戏中...</h2>
+        <p>将为您自动添加服务器，请稍候...</p>
+      </div>
+      <div class="minecraft-launch-help">
+        <strong>若游戏未弹出，请检查：</strong>
+        <ul>
+          <li><b>a.</b><span>浏览器是否阻止了本次启动</span></li>
+          <li><b>b.</b><span>设备是否已安装 Minecraft</span></li>
+        </ul>
+      </div>
+      <button type="button" @click="minecraftLaunchNoticeOpen = false">知道了</button>
+    </section>
+  </div>
 </template>
