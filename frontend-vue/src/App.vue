@@ -2440,7 +2440,7 @@ function toggleAllImportFileSelection(checked) {
                   <strong>{{ item.firstSeenAt ? formatShareMoment(item.firstSeenAt) : cleanShareText(item.missingText, '还没有记录') }}</strong>
                   <small>{{ item.firstSeenAt ? cleanShareText(item.detail || item.foundText || '已记录', '已记录') : '等待新的日志记录' }}</small>
                 </div>
-                <em>{{ item.firstSeenAt ? '已发现' : '未发现' }}</em>
+                <em>{{ item.firstSeenAt ? '已完成' : '未完成' }}</em>
               </article>
             </div>
           </section>
