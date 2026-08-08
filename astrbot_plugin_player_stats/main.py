@@ -1180,7 +1180,7 @@ class PlayerStatsPlugin(Star):
             "用法：/查日志 服务器名 X Y Z [半径]\n"
             "示例：/查日志 主服 -191 -34 750\n"
             "示例：/查日志 2服 -191 -34 750 5\n"
-            "说明：半径可省略，范围 0-100 格；查询的是被点击、破坏或放置的方块坐标。"
+            "说明：半径可省略，范围 0-100 格。"
         )
 
     def _consume_log_query_quota(self, game_id: str) -> dict[str, Any]:
