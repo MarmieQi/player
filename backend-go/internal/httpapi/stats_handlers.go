@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"math"
 	"net/http"
 	"strconv"
 	"time"
@@ -101,11 +102,16 @@ func (s *Server) publicCoordinateLogs(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	radius, ok := queryOptionalFloat(w, r, "radius", 0)
+	if !ok {
+		return
+	}
 	response, err := s.logQueryService.PublicCoordinate(r.Context(), importer.PublicCoordinateLogQueryRequest{
 		ServerID: r.URL.Query().Get("serverId"),
 		X:        x,
 		Y:        y,
 		Z:        z,
+		Radius:   radius,
 		Limit:    queryInt(r, "limit", 8),
 		Days:     queryInt(r, "days", 7),
 	})
@@ -175,9 +181,16 @@ func queryFloat(w http.ResponseWriter, r *http.Request, key string) (float64, bo
 		return 0, false
 	}
 	value, err := strconv.ParseFloat(raw, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, key+" 必须是数字")
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
+		writeError(w, http.StatusBadRequest, key+" 必须是有限数字")
 		return 0, false
 	}
 	return value, true
+}
+
+func queryOptionalFloat(w http.ResponseWriter, r *http.Request, key string, fallback float64) (float64, bool) {
+	if r.URL.Query().Get(key) == "" {
+		return fallback, true
+	}
+	return queryFloat(w, r, key)
 }

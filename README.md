@@ -165,6 +165,8 @@ npm run build
 
 ## AstrBot 插件
 
+插件开发与维护参考 [AstrBot 官方插件开发指南](https://docs.astrbot.app/dev/star/plugin-new.html)。
+
 插件目录：
 
 ```text
@@ -184,6 +186,7 @@ api_key: 管理后台“系统设置”里的 AstrBot 插件密钥
 ```text
 /绑定游戏id Steve
 /我的游戏信息
+/查日志 主服 -191 -34 750 5
 ```
 
 ## 项目结构

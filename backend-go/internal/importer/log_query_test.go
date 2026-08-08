@@ -1,6 +1,7 @@
 package importer
 
 import (
+	"math"
 	"testing"
 	"time"
 )
@@ -52,6 +53,71 @@ func TestLogQueryCoordinateFilterUsesInteractionCoordinates(t *testing.T) {
 	}
 	if criteria.matches(playerInsideTargetOutside) {
 		t.Fatal("row matched by player position; Java filters by interaction coordinate x2/y2/z2")
+	}
+}
+
+func TestLogQueryCoordinateFilterRejectsNonFiniteCoordinates(t *testing.T) {
+	validRow := []string{
+		"2026-04-01", "12:00:00", "Alex", "破坏方块",
+		"0", "0", "0", "overworld",
+		"10", "20", "30", "overworld",
+		"minecraft:stone", "",
+	}
+	for _, value := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		criteria := logQueryCriteria{
+			queryType: queryTypeCoordinate,
+			x1:        value,
+			y1:        20,
+			z1:        30,
+			x2:        value,
+			y2:        20,
+			z2:        30,
+		}
+		if criteria.matches(validRow) {
+			t.Fatalf("row matched non-finite query coordinate %v", value)
+		}
+	}
+
+	criteria := logQueryCriteria{
+		queryType: queryTypeCoordinate,
+		x1:        10,
+		y1:        20,
+		z1:        30,
+		x2:        10,
+		y2:        20,
+		z2:        30,
+	}
+	rowWithNaN := append([]string(nil), validRow...)
+	rowWithNaN[8] = "NaN"
+	if criteria.matches(rowWithNaN) {
+		t.Fatal("row with non-finite stored coordinate matched")
+	}
+}
+
+func TestPublicCoordinateRadiusUsesThreeDimensionalDistance(t *testing.T) {
+	radius := 5.0
+	criteria := logQueryCriteria{
+		queryType: queryTypeCoordinate,
+		x1:        10,
+		y1:        20,
+		z1:        30,
+		x2:        10,
+		y2:        20,
+		z2:        30,
+		radius:    &radius,
+	}
+	row := []string{
+		"2026-04-01", "12:00:00", "Alex", "破坏方块",
+		"0", "0", "0", "overworld",
+		"13", "24", "30", "overworld",
+		"minecraft:stone", "",
+	}
+	if !criteria.matches(row) {
+		t.Fatal("interaction coordinate exactly on radius did not match")
+	}
+	row[8], row[9], row[10] = "14", "24", "30"
+	if criteria.matches(row) {
+		t.Fatal("interaction coordinate outside spherical radius matched")
 	}
 }
 

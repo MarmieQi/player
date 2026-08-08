@@ -3,6 +3,7 @@ package importer
 import (
 	"bufio"
 	"context"
+	"math"
 	"os"
 	"sort"
 	"strconv"
@@ -24,6 +25,7 @@ const (
 	maxPublicLogLimit      = 20
 	defaultPublicLogDays   = 7
 	maxPublicLogDays       = 365
+	maxPublicLogRadius     = 100
 )
 
 type LogQueryRequest struct {
@@ -97,6 +99,7 @@ type PublicCoordinateLogQueryRequest struct {
 	X        float64
 	Y        float64
 	Z        float64
+	Radius   float64
 	Limit    int
 	Days     int
 }
@@ -107,6 +110,7 @@ type PublicCoordinateLogQueryView struct {
 	X             float64       `json:"x"`
 	Y             float64       `json:"y"`
 	Z             float64       `json:"z"`
+	Radius        float64       `json:"radius"`
 	Days          int           `json:"days"`
 	FromDate      *apitype.Date `json:"fromDate"`
 	ToDate        *apitype.Date `json:"toDate"`
@@ -210,6 +214,9 @@ func (s *LogQueryService) PublicCoordinate(ctx context.Context, request PublicCo
 	if !ok {
 		return PublicCoordinateLogQueryView{}, auth.NewHTTPError(404, "找不到服务器："+serverID)
 	}
+	if !finiteFloat(request.Radius) || request.Radius < 0 || request.Radius > maxPublicLogRadius {
+		return PublicCoordinateLogQueryView{}, auth.NewHTTPError(400, "查询半径必须在 0-100 格之间")
+	}
 	files, err := s.importer.localFiles(source)
 	if err != nil {
 		return PublicCoordinateLogQueryView{}, err
@@ -222,6 +229,7 @@ func (s *LogQueryService) PublicCoordinate(ctx context.Context, request PublicCo
 		x2:        request.X,
 		y2:        request.Y,
 		z2:        request.Z,
+		radius:    &request.Radius,
 	}
 	days := normalizePublicLogDays(request.Days)
 	fromDate, toDate := publicLogDateRangeFromFiles(files, days, s.importer.cfg.Location)
@@ -231,6 +239,7 @@ func (s *LogQueryService) PublicCoordinate(ctx context.Context, request PublicCo
 		X:          request.X,
 		Y:          request.Y,
 		Z:          request.Z,
+		Radius:     request.Radius,
 		Days:       days,
 		FromDate:   apiLogDate(fromDate),
 		ToDate:     apiLogDate(toDate),
@@ -429,6 +438,7 @@ type logQueryCriteria struct {
 	playerName string
 	keyword    string
 	action     string
+	radius     *float64
 }
 
 func (c logQueryCriteria) shouldScanFile(fileName string, location *time.Location) bool {
@@ -459,6 +469,10 @@ func (c logQueryCriteria) matches(columns []string) bool {
 }
 
 func (c logQueryCriteria) pointInBox(rawX, rawY, rawZ, rawDimension string) bool {
+	if !finiteFloat(c.x1) || !finiteFloat(c.y1) || !finiteFloat(c.z1) ||
+		!finiteFloat(c.x2) || !finiteFloat(c.y2) || !finiteFloat(c.z2) {
+		return false
+	}
 	if blankCoordinate(rawX) || blankCoordinate(rawY) || blankCoordinate(rawZ) {
 		return false
 	}
@@ -473,6 +487,18 @@ func (c logQueryCriteria) pointInBox(rawX, rawY, rawZ, rawDimension string) bool
 	z, ok := parseFloat(rawZ)
 	if !ok {
 		return false
+	}
+	if !finiteFloat(x) || !finiteFloat(y) || !finiteFloat(z) {
+		return false
+	}
+	if c.radius != nil {
+		if !finiteFloat(*c.radius) || *c.radius < 0 {
+			return false
+		}
+		dx, dy, dz := x-c.x1, y-c.y1, z-c.z1
+		radiusSquared := *c.radius * *c.radius
+		return dx*dx+dy*dy+dz*dz <= radiusSquared &&
+			(c.dimension == "" || strings.TrimSpace(rawDimension) == c.dimension)
 	}
 	if x < min(c.x1, c.x2) || x > max(c.x1, c.x2) {
 		return false
@@ -724,6 +750,10 @@ func blankCoordinate(value string) bool {
 func parseFloat(raw string) (float64, bool) {
 	value, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
 	return value, err == nil
+}
+
+func finiteFloat(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
 func normalizeLogPageSize(pageSize int) int {

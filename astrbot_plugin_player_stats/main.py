@@ -1,6 +1,7 @@
 import asyncio
 import inspect
 import json
+import math
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -16,8 +17,9 @@ from astrbot.core.star.filter.command import GreedyStr
     "player_stats",
     "Codex",
     "查询 Minecraft 玩家在主服和 2服的方块统计",
-    "0.12.2",
+    "0.12.3",
 )
+
 class PlayerStatsPlugin(Star):
     SERVERS = (
         ("main", "主服"),
@@ -131,7 +133,7 @@ class PlayerStatsPlugin(Star):
 
     async def _handle_coordinate_log_query(self, event: AstrMessageEvent, raw_args: str):
         mode = self._log_query_mode()
-        if mode == "admin_group" and not self._can_use_admin_log_query(event):
+        if mode == "admin_group" and not await self._can_use_admin_log_query(event):
             yield event.plain_result("没有权限：当前模式仅允许群聊管理员在群聊中使用 /查日志。")
             return
 
@@ -139,18 +141,10 @@ class PlayerStatsPlugin(Star):
         if parsed is None:
             yield event.plain_result(self._log_query_usage_text())
             return
-        target_server, coords = parsed
-        dedupe_key = self._log_query_dedupe_key(event, target_server["serverId"], coords)
-        if self._is_duplicate_log_query(dedupe_key):
-            logger.debug(f"duplicate public coordinate log query ignored: {dedupe_key}")
-            return
+        target_server, coords, radius = parsed
         x, y, z = coords
         days = self._public_log_recent_days()
         coord_text = self._format_coord_triplet(x, y, z)
-        yield event.plain_result(
-            f"正在查询 {target_server['serverName']} 已同步的最近 {days} 天日志中，请稍等...\n"
-            f"交互坐标：{coord_text}"
-        )
 
         quota: dict[str, Any] | None = None
         if mode == "admin_group":
@@ -179,8 +173,16 @@ class PlayerStatsPlugin(Star):
                 )
                 return
 
+        dedupe_key = self._log_query_dedupe_key(event, target_server["serverId"], coords, radius)
+        if self._is_duplicate_log_query(dedupe_key):
+            logger.debug(f"duplicate public coordinate log query ignored: {dedupe_key}")
+            yield event.plain_result("相同的查日志请求刚刚已经提交，请等待结果，不要重复发送。")
+            return
+
+        if mode != "admin_group":
             quota = self._consume_log_query_quota(presence["player_name"])
             if not quota["ok"]:
+                self._forget_duplicate_log_query(dedupe_key)
                 yield event.plain_result(
                     f"查询次数已用完：每个玩家 1 小时内最多查询 {quota['limit']} 次。\n"
                     f"请约 {quota['reset_minutes']} 分钟后再试。"
@@ -188,14 +190,23 @@ class PlayerStatsPlugin(Star):
                 return
             query_actor = presence["player_name"]
 
+        yield event.plain_result(
+            f"正在查询 {target_server['serverName']} 已同步的最近 {days} 天日志中，请稍等...\n"
+            f"交互坐标：{coord_text}，半径：{self._format_coord_value(radius)} 格"
+        )
+
         limit = self._public_log_result_limit()
         logger.info(
             f"public coordinate log query started: actor={query_actor} mode={mode} "
-            f"server={server['serverId']} days={days} coord={coord_text}"
+            f"server={server['serverId']} days={days} coord={coord_text} "
+            f"radius={self._format_coord_value(radius)}"
         )
         try:
-            result = await self._fetch_public_coordinate_logs(server["serverId"], x, y, z, limit, days)
+            result = await self._fetch_public_coordinate_logs(server["serverId"], x, y, z, radius, limit, days)
         except Exception as ex:
+            self._forget_duplicate_log_query(dedupe_key)
+            if quota is not None:
+                self._refund_log_query_quota(query_actor, quota.get("usage_at"))
             error = self._first_error_message([ex])
             yield event.plain_result(error or "查询失败：机器人插件内部错误，请看 AstrBot 日志。")
             return
@@ -206,6 +217,7 @@ class PlayerStatsPlugin(Star):
         )
         lines = [
             f"交互坐标日志：{coord_text}",
+            f"查询半径：{self._format_coord_value(radius)} 格",
             f"服务器：{server['serverName']}",
             f"查询者：{query_actor}",
             f"查询范围：{self._format_public_log_date_range(result, days)}",
@@ -458,7 +470,7 @@ class PlayerStatsPlugin(Star):
             return response.json()
 
     async def _fetch_public_coordinate_logs(
-        self, server_id: str, x: float, y: float, z: float, limit: int, days: int
+        self, server_id: str, x: float, y: float, z: float, radius: float, limit: int, days: int
     ) -> dict[str, Any]:
         base_url = self._api_base_url()
         timeout_seconds = self._public_log_timeout_seconds()
@@ -467,6 +479,7 @@ class PlayerStatsPlugin(Star):
             "x": self._format_coord_value(x),
             "y": self._format_coord_value(y),
             "z": self._format_coord_value(z),
+            "radius": self._format_coord_value(radius),
             "limit": str(limit),
             "days": str(days),
         }
@@ -888,7 +901,8 @@ class PlayerStatsPlugin(Star):
         matched_rows = int(data.get("matchedRows") or 0)
         rows = data.get("rows") or []
         if not matched_rows:
-            return f"{server_name}：没有匹配日志"
+            message = str(data.get("message") or "").strip() or "没有匹配日志"
+            return f"{server_name}：{message}"
 
         lines = [f"{server_name}：匹配 {matched_rows:,} 条，显示最近 {len(rows):,} 条"]
         for index, row in enumerate(rows, start=1):
@@ -898,6 +912,9 @@ class PlayerStatsPlugin(Star):
             detail = self._row_detail(row)
             coord = self._row_interaction_coord(row)
             lines.append(f"{index}. {when} {actor} {action} {detail} @ {coord}".strip())
+        failed_files = int(data.get("failedFiles") or 0)
+        if failed_files:
+            lines.append(f"注意：有 {failed_files} 个日志文件读取失败，结果可能不完整。")
         return "\n".join(lines)
 
     def _format_public_log_date_range(self, data: dict[str, Any], days: int) -> str:
@@ -923,10 +940,12 @@ class PlayerStatsPlugin(Star):
             return f"{x}, {y}, {z} · {dimension}"
         return f"{x}, {y}, {z}"
 
-    def _parse_coordinate_log_args(self, raw: str) -> tuple[dict[str, str], tuple[float, float, float]] | None:
+    def _parse_coordinate_log_args(
+        self, raw: str
+    ) -> tuple[dict[str, str], tuple[float, float, float], float] | None:
         normalized = (raw or "").replace(",", " ").replace("，", " ").strip()
         parts = [part for part in normalized.split() if part]
-        if len(parts) != 4:
+        if len(parts) not in {4, 5}:
             return None
         server = self._resolve_log_query_server(parts[0])
         if server is None:
@@ -935,13 +954,24 @@ class PlayerStatsPlugin(Star):
             coords = (float(parts[1]), float(parts[2]), float(parts[3]))
         except ValueError:
             return None
-        return server, coords
+        if not all(math.isfinite(value) for value in coords):
+            return None
+        try:
+            radius = float(parts[4]) if len(parts) == 5 else 0.0
+        except ValueError:
+            return None
+        if not math.isfinite(radius) or radius < 0 or radius > 100:
+            return None
+        return server, coords, radius
 
     def _log_query_dedupe_key(
-        self, event: AstrMessageEvent, server_id: str, coords: tuple[float, float, float]
+        self, event: AstrMessageEvent, server_id: str, coords: tuple[float, float, float], radius: float
     ) -> str:
         coord_part = ",".join(self._format_coord_value(value) for value in coords)
-        return f"{event.get_sender_id()}:{server_id}:{coord_part}"
+        return (
+            f"{event.get_sender_id()}:{self._event_group_id(event)}:{server_id}:"
+            f"{coord_part}:{self._format_coord_value(radius)}"
+        )
 
     def _is_duplicate_log_query(self, key: str) -> bool:
         now = datetime.now(timezone.utc)
@@ -956,6 +986,9 @@ class PlayerStatsPlugin(Star):
         self._recent_log_query_events[key] = now
         return False
 
+    def _forget_duplicate_log_query(self, key: str) -> None:
+        self._recent_log_query_events.pop(key, None)
+
     def _log_query_mode(self) -> str:
         raw = str(self.config.get("log_query_mode", "绑定玩家")).strip().lower()
         if raw in {"群管理员", "qq群管理员", "仅群管理员", "仅qq群管理员", "管理员", "admin", "group_admin"}:
@@ -965,21 +998,15 @@ class PlayerStatsPlugin(Star):
     def _is_group_message(self, event: AstrMessageEvent) -> bool:
         return bool(self._event_group_id(event))
 
-    def _can_use_admin_log_query(self, event: AstrMessageEvent) -> bool:
-        return self._is_group_message(event) and self._is_group_admin(event)
+    async def _can_use_admin_log_query(self, event: AstrMessageEvent) -> bool:
+        return self._is_group_message(event) and await self._is_group_admin(event)
 
-    def _is_group_admin(self, event: AstrMessageEvent) -> bool:
+    async def _is_group_admin(self, event: AstrMessageEvent) -> bool:
         if not self._is_group_message(event):
             return False
-        event_role = str(getattr(event, "role", "") or "").strip().lower()
-        if event_role == "admin":
-            return True
-        is_admin = getattr(event, "is_admin", None)
-        if callable(is_admin):
-            try:
-                return bool(is_admin())
-            except Exception as ex:
-                logger.debug(f"check AstrBot event admin failed: {ex}")
+
+        # event.role / event.is_admin() represent AstrBot's configured
+        # administrators, not the sender's role in the current QQ group.
         for role in self._event_sender_roles(event):
             if role in {"owner", "admin", "administrator", "群主", "管理员"}:
                 return True
@@ -987,6 +1014,23 @@ class PlayerStatsPlugin(Star):
             text = str(value).strip().lower()
             if text in {"true", "1", "yes", "owner", "admin", "administrator"}:
                 return True
+
+        get_group = getattr(event, "get_group", None)
+        if not callable(get_group):
+            return False
+        try:
+            group = await self._maybe_await(get_group())
+            if group is None:
+                return False
+            sender_id = str(event.get_sender_id() or "").strip()
+            owner_id = str(self._dict_child(group, "group_owner") or "").strip()
+            admin_ids = {
+                str(admin_id or "").strip()
+                for admin_id in (self._dict_child(group, "group_admins") or [])
+            }
+            return bool(sender_id) and (sender_id == owner_id or sender_id in admin_ids)
+        except Exception as ex:
+            logger.debug(f"get AstrBot group member roles failed: {ex}")
         return False
 
     def _event_group_id(self, event: AstrMessageEvent) -> str:
@@ -1025,7 +1069,7 @@ class PlayerStatsPlugin(Star):
     def _event_sender_roles(self, event: AstrMessageEvent) -> set[str]:
         roles: set[str] = set()
         for value in self._event_values_from_sources(
-            self._event_sender_sources(event),
+            self._event_group_member_sources(event),
             ("role", "permission", "user_role", "member_role"),
         ):
             text = str(value or "").strip().lower()
@@ -1035,11 +1079,11 @@ class PlayerStatsPlugin(Star):
 
     def _event_sender_flag_values(self, event: AstrMessageEvent) -> list[Any]:
         return self._event_values_from_sources(
-            self._event_sender_sources(event),
+            self._event_group_member_sources(event),
             ("is_admin", "admin", "is_owner", "owner"),
         )
 
-    def _event_sender_sources(self, event: AstrMessageEvent) -> list[Any]:
+    def _event_group_member_sources(self, event: AstrMessageEvent) -> list[Any]:
         message_obj = getattr(event, "message_obj", None)
         raw_message = getattr(message_obj, "raw_message", None)
         return [
@@ -1049,6 +1093,11 @@ class PlayerStatsPlugin(Star):
             self._dict_child(raw_message, "author"),
             self._dict_child(raw_message, "user"),
             raw_message,
+        ]
+
+    def _event_sender_sources(self, event: AstrMessageEvent) -> list[Any]:
+        return [
+            *self._event_group_member_sources(event),
             event,
         ]
 
@@ -1083,7 +1132,10 @@ class PlayerStatsPlugin(Star):
     def _dict_child(self, value: Any, key: str) -> Any:
         if isinstance(value, dict):
             return value.get(key)
-        return None
+        try:
+            return getattr(value, key, None)
+        except Exception:
+            return None
 
     def _resolve_log_query_server(self, raw: str) -> dict[str, str] | None:
         value = (raw or "").strip().lower()
@@ -1125,10 +1177,10 @@ class PlayerStatsPlugin(Star):
 
     def _log_query_usage_text(self) -> str:
         return (
-            "用法：/查日志 服务器名 X Y Z\n"
+            "用法：/查日志 服务器名 X Y Z [半径]\n"
             "示例：/查日志 主服 -191 -34 750\n"
-            "示例：/查日志 2服 -191 -34 750\n"
-            "说明：查询的是交互坐标，也就是被点击、破坏或放置的方块坐标。"
+            "示例：/查日志 2服 -191 -34 750 5\n"
+            "说明：半径可省略，范围 0-100 格；查询的是被点击、破坏或放置的方块坐标。"
         )
 
     def _consume_log_query_quota(self, game_id: str) -> dict[str, Any]:
@@ -1153,7 +1205,15 @@ class PlayerStatsPlugin(Star):
             "limit": limit,
             "remaining": max(0, limit - len(bucket)),
             "reset_minutes": 0,
+            "usage_at": now,
         }
+
+    def _refund_log_query_quota(self, game_id: str, usage_at: Any) -> None:
+        if not isinstance(usage_at, datetime):
+            return
+        key = (game_id or "").strip().lower()
+        bucket = self._log_query_usage.get(key, [])
+        self._log_query_usage[key] = [value for value in bucket if value != usage_at]
 
     def _ranking_limit(self) -> int:
         try:
