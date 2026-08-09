@@ -279,7 +279,7 @@ func (s *Service) CreateLogQueryToken(ctx context.Context, request importer.Publ
 		return LogQueryShareTokenResponse{}, err
 	}
 	now := time.Now().UTC()
-	ttl := s.settings.ShareTTLMinutes(ctx)
+	ttl := s.settings.LogQueryShareTTLMinutes(ctx)
 	token, err := s.generateUniqueToken(ctx, "log_query_share_tokens")
 	if err != nil {
 		return LogQueryShareTokenResponse{}, err
