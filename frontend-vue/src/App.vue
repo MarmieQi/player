@@ -81,6 +81,12 @@ const xrayShareEvidenceRowExpandedKeys = ref(new Set())
 const xrayShareOrePositionsExpanded = ref(false)
 const xrayShareOrePositionPage = ref(1)
 const xrayShareOrePositionPageSize = ref(100)
+const logShareToken = ref('')
+const logShareData = ref(null)
+const logShareLoading = ref(false)
+const logShareError = ref('')
+const logSharePage = ref(1)
+const logSharePageSize = ref(50)
 const selectedShareServerId = ref('')
 const rankingShareToken = ref('')
 const rankingShareData = ref(null)
@@ -126,6 +132,7 @@ const LOG_QUERY_TYPE_PLAYER_KEYWORD = 'playerKeyword'
 const LOG_QUERY_TYPE_XRAY = 'xrayAnalysis'
 const LOG_QUERY_PAGE_SIZE_OPTIONS = [50, 100, 200, 500]
 const XRAY_ORE_POSITION_PAGE_SIZE_OPTIONS = [50, 100, 200, 500]
+const LOG_SHARE_PAGE_SIZE_OPTIONS = [25, 50, 100, 200]
 const ACTIVE_JOB_STATUSES = ['PENDING', 'RUNNING']
 
 const filters = ref({
@@ -170,6 +177,7 @@ const serverTabs = computed(() => [
 
 const isSharePage = computed(() => Boolean(shareToken.value))
 const isXraySharePage = computed(() => Boolean(xrayShareToken.value))
+const isLogSharePage = computed(() => Boolean(logShareToken.value))
 const isRankingSharePage = computed(() => Boolean(rankingShareToken.value))
 const shareServers = computed(() => shareData.value?.servers || [])
 const selectedShareServer = computed(() => {
@@ -218,6 +226,22 @@ const xrayShareRemainingText = computed(() => {
   const seconds = totalSeconds % 60
   if (minutes > 0) return `剩余 ${minutes} 分钟`
   return `剩余 ${seconds} 秒`
+})
+const logShareRows = computed(() => logShareData.value?.rows || [])
+const logShareTotalPages = computed(() => Math.max(1, Math.ceil(logShareRows.value.length / logSharePageSize.value)))
+const logShareOffset = computed(() => (clampPage(logSharePage.value, logShareTotalPages.value) - 1) * logSharePageSize.value)
+const logSharePagedRows = computed(() => logShareRows.value.slice(logShareOffset.value, logShareOffset.value + logSharePageSize.value))
+const logShareRemainingMs = computed(() => {
+  if (!logShareData.value?.expiresAt) return 0
+  return Math.max(0, new Date(logShareData.value.expiresAt).getTime() - shareNow.value)
+})
+const logShareRemainingText = computed(() => {
+  if (logShareError.value) return '链接已过期'
+  if (!logShareData.value?.expiresAt) return '链接有效期内可访问'
+  const totalSeconds = Math.ceil(logShareRemainingMs.value / 1000)
+  if (totalSeconds <= 0) return '链接已过期'
+  const minutes = Math.floor(totalSeconds / 60)
+  return minutes > 0 ? `剩余 ${minutes} 分钟` : `剩余 ${totalSeconds % 60} 秒`
 })
 const rankingShareServers = computed(() => rankingShareData.value?.servers || [])
 const selectedRankingShareServer = computed(() => {
@@ -378,6 +402,14 @@ function openSharePageFromPath() {
     return true
   }
 
+  const logMatch = window.location.pathname.match(/^\/share\/logs\/([^/?#]+)/)
+  if (logMatch) {
+    logShareToken.value = decodeURIComponent(logMatch[1])
+    authChecked.value = true
+    loadLogShareDetails()
+    return true
+  }
+
   const rankingMatch = window.location.pathname.match(/^\/share\/ranking\/([^/?#]+)/)
   if (rankingMatch) {
     rankingShareToken.value = decodeURIComponent(rankingMatch[1])
@@ -394,6 +426,27 @@ function openSharePageFromPath() {
   authChecked.value = true
   loadShareDetails()
   return true
+}
+
+async function loadLogShareDetails() {
+  logShareLoading.value = true
+  logShareError.value = ''
+  try {
+    if (import.meta.env.DEV && logShareToken.value === 'preview') {
+      const { createLogSharePreviewData } = await import('./log-share-preview')
+      logShareData.value = createLogSharePreviewData()
+    } else {
+      logShareData.value = await apiGet(`/api/share/log-query/${encodeURIComponent(logShareToken.value)}`, {}, { auth: false })
+    }
+    logSharePage.value = 1
+    startShareTicker()
+  } catch (err) {
+    logShareData.value = null
+    logShareError.value = err.message || '链接已过期，请重新在群里查询'
+    stopShareTicker()
+  } finally {
+    logShareLoading.value = false
+  }
 }
 
 async function loadXrayShareDetails() {
@@ -465,6 +518,10 @@ function startShareTicker() {
     }
     if (rankingShareData.value?.expiresAt && rankingShareRemainingMs.value <= 0) {
       rankingShareError.value = '链接已过期，请重新在群里查询'
+      stopShareTicker()
+    }
+    if (logShareData.value?.expiresAt && logShareRemainingMs.value <= 0) {
+      logShareError.value = '链接已过期，请重新在群里查询'
       stopShareTicker()
     }
   }, 1000)
@@ -1559,6 +1616,7 @@ function normalizeSyncConfig(config) {
     ...config,
     skipToday: config.skipToday !== false,
     shareTtlMinutes: normalizeShareTtlMinutes(config.shareTtlMinutes),
+    logQueryHourlyLimit: normalizeLogQueryHourlyLimit(config.logQueryHourlyLimit),
     autoTasks: Array.isArray(config.autoTasks) && config.autoTasks.length
       ? config.autoTasks.map(normalizeAutoTask)
       : (config.sources || []).map((source) => normalizeAutoTask({
@@ -1588,6 +1646,12 @@ function normalizeShareTtlMinutes(value) {
   const minutes = Number(value)
   if (!Number.isFinite(minutes) || minutes <= 0) return 60
   return Math.max(5, Math.min(Math.round(minutes), 10080))
+}
+
+function normalizeLogQueryHourlyLimit(value) {
+  const limit = Number(value)
+  if (!Number.isFinite(limit) || limit <= 0) return 5
+  return Math.max(1, Math.min(Math.round(limit), 60))
 }
 
 function defaultSyncTime(serverId) {
@@ -1865,10 +1929,20 @@ function logQueryCoordinateText(x, y, z, dimension) {
   return `${x}, ${y}, ${z}${dim}`
 }
 
+function formatCoordValue(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return '-'
+  return Number.isInteger(number) ? String(number) : number.toLocaleString(undefined, { maximumFractionDigits: 3 })
+}
+
 function rareOreDetailText(row) {
   const detail = [row?.detail1, row?.detail2]
     .find((value) => value && value !== '-')
   return detail || '-'
+}
+
+function logShareActionClass(action) {
+  return String(action || '').includes('放置') ? 'is-placed' : 'is-broken'
 }
 
 function evidenceRowText(row) {
@@ -1915,6 +1989,16 @@ function pagedXrayRows(rows, page, pageSize) {
   const safePage = clampPage(page, totalPages)
   const start = (safePage - 1) * pageSize
   return rows.slice(start, start + pageSize)
+}
+
+function setLogSharePage(page) {
+  logSharePage.value = clampPage(page, logShareTotalPages.value)
+}
+
+function setLogSharePageSize(pageSize) {
+  const parsed = Number.parseInt(pageSize, 10)
+  logSharePageSize.value = LOG_SHARE_PAGE_SIZE_OPTIONS.includes(parsed) ? parsed : 50
+  logSharePage.value = 1
 }
 
 function setXrayShareOrePositionPage(page) {
@@ -2891,6 +2975,103 @@ function toggleAllImportFileSelection(checked) {
     </template>
   </main>
 
+  <main v-else-if="isLogSharePage" class="log-share-page">
+    <section v-if="logShareLoading" class="share-v2-state">
+      <div class="share-v2-state-mark"><Search :size="24" /></div>
+      <div>
+        <h1>正在打开日志</h1>
+        <p>正在读取查询结果</p>
+      </div>
+    </section>
+
+    <section v-else-if="logShareError" class="share-v2-state share-v2-state-error">
+      <div class="share-v2-state-mark"><Clock :size="24" /></div>
+      <div>
+        <h1>链接已过期</h1>
+        <p>{{ logShareError }}</p>
+      </div>
+    </section>
+
+    <template v-else-if="logShareData">
+      <header class="log-share-hero">
+        <div>
+          <p class="log-share-eyebrow">SERVER LOGS</p>
+          <h1>服务器日志</h1>
+          <p>{{ logShareData.serverName }} · {{ logShareData.fromDate || '-' }} 至 {{ logShareData.toDate || '-' }}</p>
+        </div>
+        <div class="log-share-target">
+          <span><Crosshair :size="16" /> 查询中心</span>
+          <strong>{{ formatCoordValue(logShareData.x) }}, {{ formatCoordValue(logShareData.y) }}, {{ formatCoordValue(logShareData.z) }}</strong>
+          <small>半径 {{ formatCoordValue(logShareData.radius) }} 格 · {{ logShareRemainingText }}</small>
+        </div>
+      </header>
+
+      <section class="log-share-summary">
+        <article><Search :size="19" /><span>匹配日志</span><strong>{{ formatNumber(logShareData.matchedRows || 0) }}</strong></article>
+        <article><FileText :size="19" /><span>日志总数</span><strong>{{ formatNumber(logShareRows.length) }}</strong></article>
+        <article><Database :size="19" /><span>扫描文件</span><strong>{{ formatNumber(logShareData.scannedFiles || 0) }}</strong></article>
+        <article><Clock :size="19" /><span>链接状态</span><strong>{{ logShareRemainingText }}</strong></article>
+      </section>
+
+      <section class="log-share-content">
+        <div class="log-share-heading">
+          <div>
+            <p>LOG ENTRIES</p>
+            <h2>日志明细</h2>
+          </div>
+          <span v-if="Number(logShareData.matchedRows || 0) > logShareRows.length">
+            匹配 {{ formatNumber(logShareData.matchedRows) }} 条，单次链接最多加载 {{ formatNumber(logShareRows.length) }} 条
+          </span>
+          <span v-else>
+            已加载全部 {{ formatNumber(logShareRows.length) }} 条日志
+          </span>
+        </div>
+
+        <div v-if="logSharePagedRows.length" class="log-share-table-wrap">
+          <table>
+            <thead>
+              <tr><th>时间</th><th>玩家</th><th>行为</th><th>位置</th><th>详情</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in logSharePagedRows" :key="`${row.fileName}:${row.lineNumber}`">
+                <td>{{ row.date }} {{ row.time }}</td>
+                <td><strong>{{ row.playerName || '-' }}</strong></td>
+                <td><span class="log-share-action" :class="logShareActionClass(row.action)">{{ row.action || '-' }}</span></td>
+                <td>{{ logQueryCoordinateText(row.x2, row.y2, row.z2, row.dimension2) }}</td>
+                <td class="message-cell">{{ rareOreDetailText(row) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div v-if="logSharePagedRows.length" class="log-share-cards">
+          <article v-for="row in logSharePagedRows" :key="`${row.fileName}:${row.lineNumber}:card`" :class="logShareActionClass(row.action)">
+            <div><strong>{{ row.playerName || '-' }}</strong><span>{{ row.date }} {{ row.time }}</span></div>
+            <p>{{ row.action || '-' }} · {{ rareOreDetailText(row) }}</p>
+            <small><Crosshair :size="14" />{{ logQueryCoordinateText(row.x2, row.y2, row.z2, row.dimension2) }}</small>
+          </article>
+        </div>
+
+        <p v-else class="log-share-empty">{{ logShareData.message || '没有匹配日志' }}</p>
+
+        <div v-if="logShareRows.length" class="log-share-pagination">
+          <span>第 {{ clampPage(logSharePage, logShareTotalPages) }} / {{ logShareTotalPages }} 页，共 {{ formatNumber(logShareRows.length) }} 条</span>
+          <div>
+            <label>每页
+              <select :value="logSharePageSize" @change="setLogSharePageSize($event.target.value)">
+                <option v-for="size in LOG_SHARE_PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</option>
+              </select>
+            </label>
+            <button type="button" title="上一页" aria-label="上一页" :disabled="logSharePage <= 1" @click="setLogSharePage(logSharePage - 1)"><ChevronLeft :size="18" /></button>
+            <button type="button" title="下一页" aria-label="下一页" :disabled="logSharePage >= logShareTotalPages" @click="setLogSharePage(logSharePage + 1)"><ChevronRight :size="18" /></button>
+          </div>
+        </div>
+      </section>
+
+      <footer class="log-share-footer">{{ logShareData.serverName }} · 服务器日志</footer>
+    </template>
+  </main>
+
   <main v-else-if="isRankingSharePage" class="ranking-share-v2">
     <section v-if="rankingShareLoading" class="share-v2-state">
       <div class="share-v2-state-mark"><Clock :size="24" /></div>
@@ -3207,8 +3388,13 @@ function toggleAllImportFileSelection(checked) {
               <span>分享链接有效期（分钟）</span>
               <input type="number" min="5" max="10080" step="1" v-model.number="syncConfig.shareTtlMinutes" />
             </label>
+            <label>
+              <span>普通成员查日志次数（每小时）</span>
+              <input type="number" min="1" max="60" step="1" v-model.number="syncConfig.logQueryHourlyLimit" />
+            </label>
             <p class="settings-hint">把这个密钥填到 AstrBot 插件配置的 api_key 中。插件只用它查询玩家统计，不需要管理员登录 token。</p>
-            <p class="settings-hint">/我的游戏信息 生成的详细足迹链接会使用这个有效期，范围 5 分钟到 7 天。</p>
+            <p class="settings-hint">QQ群主和群管理员查询日志不限制次数；普通成员按绑定游戏 ID 限制，范围每小时 1-60 次。</p>
+            <p class="settings-hint">/我的游戏信息 和 /查日志生成的详情链接会使用这个有效期，范围 5 分钟到 7 天。</p>
             <div class="settings-actions">
               <button class="secondary-button" type="button" :disabled="astrbotKeyLoading || !astrbotKey?.apiKey" @click="copyAstrbotKey">
                 <FileText :size="16" />

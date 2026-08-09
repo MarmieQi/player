@@ -2,6 +2,7 @@ package importer
 
 import (
 	"math"
+	"os"
 	"testing"
 	"time"
 )
@@ -121,6 +122,30 @@ func TestPublicCoordinateRadiusUsesThreeDimensionalDistance(t *testing.T) {
 	}
 }
 
+func TestPublicCoordinateScanOnlyIncludesBrokenAndPlacedBlocks(t *testing.T) {
+	path := t.TempDir() + "/player_actions_2026-04-01.csv"
+	contents := "2026-04-01,12:00:00,Alex,破坏方块,0,0,0,overworld,10,20,30,overworld,minecraft:stone,\n" +
+		"2026-04-01,12:01:00,Alex,打开容器,0,0,0,overworld,10,20,30,overworld,minecraft:chest,\n" +
+		"2026-04-01,12:02:00,Alex,放置方块,0,0,0,overworld,10,20,30,overworld,minecraft:dirt,\n"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	radius := 1.0
+	criteria := logQueryCriteria{queryType: queryTypeCoordinate, x1: 10, y1: 20, z1: 30, x2: 10, y2: 20, z2: 30, radius: &radius}
+	result := PublicCoordinateLogQueryView{}
+	if err := scanPublicCoordinateFile(RemoteLogFile{Path: path, FileName: "player_actions_2026-04-01.csv"}, criteria, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.MatchedRows != 2 || len(result.Rows) != 2 {
+		t.Fatalf("matched rows = %d, rows = %d; want only break/place rows", result.MatchedRows, len(result.Rows))
+	}
+	for _, row := range result.Rows {
+		if parseAction(row.Action) == "" {
+			t.Fatalf("unexpected shared action %q", row.Action)
+		}
+	}
+}
+
 func TestLogQueryPlayerKeywordDateIsFileScopedLikeJava(t *testing.T) {
 	location := time.FixedZone("CST", 8*60*60)
 	from := time.Date(2026, 4, 1, 0, 0, 0, 0, location)
@@ -154,6 +179,15 @@ func TestNormalizePublicLogDays(t *testing.T) {
 	}
 	if got := normalizePublicLogDays(maxPublicLogDays + 1); got != maxPublicLogDays {
 		t.Fatalf("normalizePublicLogDays(max+1) = %d, want %d", got, maxPublicLogDays)
+	}
+}
+
+func TestNormalizePublicLogLimitSupportsShareSnapshot(t *testing.T) {
+	if got := normalizePublicLogLimit(maxPublicLogLimit); got != maxPublicLogLimit {
+		t.Fatalf("normalizePublicLogLimit(share limit) = %d, want %d", got, maxPublicLogLimit)
+	}
+	if got := normalizePublicLogLimit(maxPublicLogLimit + 1); got != maxPublicLogLimit {
+		t.Fatalf("normalizePublicLogLimit(max+1) = %d, want %d", got, maxPublicLogLimit)
 	}
 }
 

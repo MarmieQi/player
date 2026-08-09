@@ -70,24 +70,6 @@
     "default": 24,
     "hint": "玩家成功使用一次 /我的游戏信息 后，重新绑定游戏 ID 的冷却时间。范围 0-8760，0 表示关闭冷却。"
   },
-  "log_query_hourly_limit": {
-    "description": "查日志每小时次数",
-    "type": "int",
-    "default": 5,
-    "hint": "每个绑定游戏 ID 在 1 小时内最多使用 /查日志 的次数，范围 1-60。"
-  },
-  "log_query_mode": {
-    "description": "查日志权限模式",
-    "type": "string",
-    "default": "绑定玩家",
-    "hint": "可填：绑定玩家、群管理员。绑定玩家模式要求用户先绑定游戏 ID；群管理员模式仅允许群聊管理员查询，不要求绑定游戏 ID。"
-  },
-  "log_query_result_limit": {
-    "description": "查日志返回条数",
-    "type": "int",
-    "default": 8,
-    "hint": "/查日志 目标服务器最多显示最近多少条匹配日志，范围 1-20。"
-  },
   "log_query_recent_days": {
     "description": "查日志最近天数",
     "type": "int",

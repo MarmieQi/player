@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"player-stats-backend-go/internal/auth"
+	"player-stats-backend-go/internal/importer"
 	"player-stats-backend-go/internal/settings"
 	sharemodel "player-stats-backend-go/internal/share"
 	"player-stats-backend-go/internal/stats"
@@ -65,6 +66,33 @@ func (s *Server) createRankingShareToken(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) rankingShareDetails(w http.ResponseWriter, r *http.Request) {
 	response, err := s.shareService.RankingDetails(r.Context(), r.PathValue("token"))
+	s.writeHTTPErrorResult(w, http.StatusOK, response, err)
+}
+
+func (s *Server) createLogQueryShareToken(w http.ResponseWriter, r *http.Request) {
+	if !s.authService.MatchesAstrBotKey(r.Context(), r.Header.Get(settings.AstrBotAPIKeyHeader)) {
+		writeError(w, http.StatusUnauthorized, "插件密钥无效")
+		return
+	}
+	var request importer.PublicCoordinateLogQueryRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "请求体不是有效 JSON")
+		return
+	}
+	response, err := s.shareService.CreateLogQueryToken(r.Context(), request)
+	s.writeHTTPErrorResult(w, http.StatusCreated, response, err)
+}
+
+func (s *Server) logQuerySettings(w http.ResponseWriter, r *http.Request) {
+	if !s.authService.MatchesAstrBotKey(r.Context(), r.Header.Get(settings.AstrBotAPIKeyHeader)) {
+		writeError(w, http.StatusUnauthorized, "插件密钥无效")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.settingsService.LogQuerySettings(r.Context()))
+}
+
+func (s *Server) logQueryShareDetails(w http.ResponseWriter, r *http.Request) {
+	response, err := s.shareService.LogQueryDetails(r.Context(), r.PathValue("token"))
 	s.writeHTTPErrorResult(w, http.StatusOK, response, err)
 }
 

@@ -17,7 +17,7 @@ from astrbot.core.star.filter.command import GreedyStr
     "player_stats",
     "Codex",
     "查询 Minecraft 玩家在主服和 2服的方块统计",
-    "0.12.3",
+    "0.13.0",
 )
 
 class PlayerStatsPlugin(Star):
@@ -132,11 +132,6 @@ class PlayerStatsPlugin(Star):
             yield result
 
     async def _handle_coordinate_log_query(self, event: AstrMessageEvent, raw_args: str):
-        mode = self._log_query_mode()
-        if mode == "admin_group" and not await self._can_use_admin_log_query(event):
-            yield event.plain_result("没有权限：当前模式仅允许群聊管理员在群聊中使用 /查日志。")
-            return
-
         parsed = self._parse_coordinate_log_args(raw_args)
         if parsed is None:
             yield event.plain_result(self._log_query_usage_text())
@@ -145,9 +140,11 @@ class PlayerStatsPlugin(Star):
         x, y, z = coords
         days = self._public_log_recent_days()
         coord_text = self._format_coord_triplet(x, y, z)
+        is_group_admin = await self._can_use_admin_log_query(event)
+        mode = "group_admin" if is_group_admin else "bound_player"
 
         quota: dict[str, Any] | None = None
-        if mode == "admin_group":
+        if is_group_admin:
             server = target_server
             query_actor = self._event_sender_label(event)
         else:
@@ -179,8 +176,9 @@ class PlayerStatsPlugin(Star):
             yield event.plain_result("相同的查日志请求刚刚已经提交，请等待结果，不要重复发送。")
             return
 
-        if mode != "admin_group":
-            quota = self._consume_log_query_quota(presence["player_name"])
+        if not is_group_admin:
+            hourly_limit = await self._fetch_log_query_hourly_limit()
+            quota = self._consume_log_query_quota(presence["player_name"], hourly_limit)
             if not quota["ok"]:
                 self._forget_duplicate_log_query(dedupe_key)
                 yield event.plain_result(
@@ -195,14 +193,14 @@ class PlayerStatsPlugin(Star):
             f"交互坐标：{coord_text}，半径：{self._format_coord_value(radius)} 格"
         )
 
-        limit = self._public_log_result_limit()
         logger.info(
             f"public coordinate log query started: actor={query_actor} mode={mode} "
             f"server={server['serverId']} days={days} coord={coord_text} "
             f"radius={self._format_coord_value(radius)}"
         )
         try:
-            result = await self._fetch_public_coordinate_logs(server["serverId"], x, y, z, radius, limit, days)
+            share = await self._create_log_query_share(server["serverId"], x, y, z, radius, days)
+            result = share.get("result") or {}
         except Exception as ex:
             self._forget_duplicate_log_query(dedupe_key)
             if quota is not None:
@@ -224,12 +222,15 @@ class PlayerStatsPlugin(Star):
         ]
         if quota is not None:
             lines.append(f"1小时内剩余查询次数：{quota['remaining']}/{quota['limit']}")
-        lines.extend([
-            "",
-            self._format_public_log_result(server, result),
-            "",
-            "提示：最新日志通常在每天凌晨 0-1 点刷新，查询结果以服务器已同步的本地日志为准。",
-        ])
+        matched_rows = int(result.get("matchedRows") or 0)
+        share_link = self._log_query_share_link(share)
+        if matched_rows and share_link:
+            lines.extend(["", f"查看服务器日志（共 {matched_rows:,} 条）：{share_link}", f"链接{self._share_ttl_text(share)}内有效"])
+        elif not matched_rows:
+            lines.extend(["", str(result.get("message") or "没有匹配日志")])
+        else:
+            lines.extend(["", "查询成功，但未能生成详情链接，请联系管理员检查分享地址配置。"])
+        lines.extend(["", "提示：最新日志通常在每天凌晨 0-1 点刷新，查询结果以服务器已同步的本地日志为准。"])
         yield event.plain_result("\n".join(lines))
 
     async def _query_and_format_all(self, game_id: str) -> tuple[str, bool]:
@@ -469,29 +470,51 @@ class PlayerStatsPlugin(Star):
             response.raise_for_status()
             return response.json()
 
-    async def _fetch_public_coordinate_logs(
-        self, server_id: str, x: float, y: float, z: float, radius: float, limit: int, days: int
+    async def _create_log_query_share(
+        self, server_id: str, x: float, y: float, z: float, radius: float, days: int
     ) -> dict[str, Any]:
         base_url = self._api_base_url()
         timeout_seconds = self._public_log_timeout_seconds()
-        params: dict[str, str] = {
+        body = {
             "serverId": server_id,
-            "x": self._format_coord_value(x),
-            "y": self._format_coord_value(y),
-            "z": self._format_coord_value(z),
-            "radius": self._format_coord_value(radius),
-            "limit": str(limit),
-            "days": str(days),
+            "x": x,
+            "y": y,
+            "z": z,
+            "radius": radius,
+            "days": days,
         }
 
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-            response = await client.get(
-                f"{base_url}/api/stats/public-coordinate-logs",
-                params=params,
+            response = await client.post(
+                f"{base_url}/api/share/log-query-tokens",
+                json=body,
                 headers=self._auth_headers(),
             )
             response.raise_for_status()
             return response.json()
+
+    async def _fetch_log_query_hourly_limit(self) -> int:
+        try:
+            async with httpx.AsyncClient(timeout=float(self.config.get("timeout_seconds", 8))) as client:
+                response = await client.get(
+                    f"{self._api_base_url()}/api/share/log-query-settings",
+                    headers=self._auth_headers(),
+                )
+                response.raise_for_status()
+                data = response.json()
+                return max(1, min(int(data.get("ordinaryMemberHourlyLimit") or 5), 60))
+        except Exception as ex:
+            logger.warning(f"load log query settings failed, use default hourly limit: {ex}")
+            return 5
+
+    def _log_query_share_link(self, data: dict[str, Any]) -> str:
+        share_path = str(data.get("sharePath") or "").strip()
+        if share_path:
+            return f"{self._share_base_url()}/{share_path.lstrip('/')}"
+        token = str(data.get("token") or "").strip()
+        if token:
+            return f"{self._share_base_url()}/share/logs/{token}"
+        return ""
 
     async def _create_share_link(self, game_id: str) -> dict[str, str]:
         base_url = self._api_base_url()
@@ -896,49 +919,12 @@ class PlayerStatsPlugin(Star):
 
         return "\n".join(lines)
 
-    def _format_public_log_result(self, server: dict[str, str], data: dict[str, Any]) -> str:
-        server_name = data.get("serverName") or server.get("serverName") or server.get("serverId") or "-"
-        matched_rows = int(data.get("matchedRows") or 0)
-        rows = data.get("rows") or []
-        if not matched_rows:
-            message = str(data.get("message") or "").strip() or "没有匹配日志"
-            return f"{server_name}：{message}"
-
-        lines = [f"{server_name}：匹配 {matched_rows:,} 条，显示最近 {len(rows):,} 条"]
-        for index, row in enumerate(rows, start=1):
-            when = " ".join(part for part in [str(row.get("date") or ""), str(row.get("time") or "")] if part).strip()
-            actor = row.get("playerName") or "-"
-            action = row.get("action") or "-"
-            detail = self._row_detail(row)
-            coord = self._row_interaction_coord(row)
-            lines.append(f"{index}. {when} {actor} {action} {detail} @ {coord}".strip())
-        failed_files = int(data.get("failedFiles") or 0)
-        if failed_files:
-            lines.append(f"注意：有 {failed_files} 个日志文件读取失败，结果可能不完整。")
-        return "\n".join(lines)
-
     def _format_public_log_date_range(self, data: dict[str, Any], days: int) -> str:
         from_date = self._format_short_date(data.get("fromDate"))
         to_date = self._format_short_date(data.get("toDate"))
         if from_date != "-" and to_date != "-":
             return f"{from_date} - {to_date}（按本地日志文件，最近 {days} 天）"
         return f"已同步的最近 {days} 天本地日志"
-
-    def _row_detail(self, row: dict[str, Any]) -> str:
-        for key in ("detail1", "detail2"):
-            value = str(row.get(key) or "").strip()
-            if value and value != "-":
-                return value
-        return "-"
-
-    def _row_interaction_coord(self, row: dict[str, Any]) -> str:
-        x = str(row.get("x2") or "-")
-        y = str(row.get("y2") or "-")
-        z = str(row.get("z2") or "-")
-        dimension = str(row.get("dimension2") or "").strip()
-        if dimension and dimension != "-":
-            return f"{x}, {y}, {z} · {dimension}"
-        return f"{x}, {y}, {z}"
 
     def _parse_coordinate_log_args(
         self, raw: str
@@ -988,12 +974,6 @@ class PlayerStatsPlugin(Star):
 
     def _forget_duplicate_log_query(self, key: str) -> None:
         self._recent_log_query_events.pop(key, None)
-
-    def _log_query_mode(self) -> str:
-        raw = str(self.config.get("log_query_mode", "绑定玩家")).strip().lower()
-        if raw in {"群管理员", "qq群管理员", "仅群管理员", "仅qq群管理员", "管理员", "admin", "group_admin"}:
-            return "admin_group"
-        return "bound_player"
 
     def _is_group_message(self, event: AstrMessageEvent) -> bool:
         return bool(self._event_group_id(event))
@@ -1183,8 +1163,8 @@ class PlayerStatsPlugin(Star):
             "说明：半径可省略，范围 0-100 格。"
         )
 
-    def _consume_log_query_quota(self, game_id: str) -> dict[str, Any]:
-        limit = self._public_log_hourly_limit()
+    def _consume_log_query_quota(self, game_id: str, limit: int) -> dict[str, Any]:
+        limit = max(1, min(int(limit), 60))
         key = (game_id or "").strip().lower()
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=1)
@@ -1220,18 +1200,6 @@ class PlayerStatsPlugin(Star):
             return max(1, min(int(self.config.get("ranking_limit", 10)), 20))
         except (TypeError, ValueError):
             return 10
-
-    def _public_log_hourly_limit(self) -> int:
-        try:
-            return max(1, min(int(self.config.get("log_query_hourly_limit", 5)), 60))
-        except (TypeError, ValueError):
-            return 5
-
-    def _public_log_result_limit(self) -> int:
-        try:
-            return max(1, min(int(self.config.get("log_query_result_limit", 8)), 20))
-        except (TypeError, ValueError):
-            return 8
 
     def _public_log_recent_days(self) -> int:
         try:

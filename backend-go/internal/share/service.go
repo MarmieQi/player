@@ -27,25 +27,28 @@ type Service struct {
 	settings          *settings.Service
 	stats             *stats.Service
 	xray              *importer.XrayAnalysisService
+	logs              *importer.LogQueryService
 	mu                sync.Mutex
 	xraySubs          map[chan XrayGroupMessageResponse]struct{}
 	xrayMessages      map[int64]queuedXrayGroupMessage
 	nextXrayMessageID int64
 }
 
-func NewService(db *sql.DB, cfg config.Config, settingsService *settings.Service, statsService *stats.Service, xrayService *importer.XrayAnalysisService) *Service {
+func NewService(db *sql.DB, cfg config.Config, settingsService *settings.Service, statsService *stats.Service, xrayService *importer.XrayAnalysisService, logQueryService *importer.LogQueryService) *Service {
 	return &Service{
 		db:           db,
 		cfg:          cfg,
 		settings:     settingsService,
 		stats:        statsService,
 		xray:         xrayService,
+		logs:         logQueryService,
 		xraySubs:     map[chan XrayGroupMessageResponse]struct{}{},
 		xrayMessages: map[int64]queuedXrayGroupMessage{},
 	}
 }
 
 const xrayGroupMessageTTL = 10 * time.Minute
+const logQueryShareLimit = 5000
 
 type queuedXrayGroupMessage struct {
 	message   XrayGroupMessageResponse
@@ -59,6 +62,17 @@ type ShareTokenResponse struct {
 	TTLMinutes int           `json:"ttlMinutes"`
 	FromDate   *apitype.Date `json:"fromDate,omitempty"`
 	ToDate     *apitype.Date `json:"toDate,omitempty"`
+}
+
+type LogQueryShareTokenResponse struct {
+	ShareTokenResponse
+	Result importer.PublicCoordinateLogQueryView `json:"result"`
+}
+
+type LogQueryShareDetailsResponse struct {
+	importer.PublicCoordinateLogQueryView
+	ExpiresAt  time.Time `json:"expiresAt"`
+	TTLMinutes int       `json:"ttlMinutes"`
 }
 
 type PlayerDetailsResponse struct {
@@ -245,6 +259,86 @@ func (s *Service) PlayerDetails(ctx context.Context, token string) (PlayerDetail
 		TTLMinutes:    ttlMinutes(tokenRow.createdAt, tokenRow.expiresAt),
 		Servers:       servers,
 	}, nil
+}
+
+func (s *Service) CreateLogQueryToken(ctx context.Context, request importer.PublicCoordinateLogQueryRequest) (LogQueryShareTokenResponse, error) {
+	if s.logs == nil {
+		return LogQueryShareTokenResponse{}, errors.New("log query service is unavailable")
+	}
+	request.Limit = logQueryShareLimit
+	result, err := s.logs.PublicCoordinate(ctx, request)
+	if err != nil {
+		return LogQueryShareTokenResponse{}, err
+	}
+	sanitizeSharedLogRows(&result)
+	if err := s.deleteExpiredTokens(ctx); err != nil {
+		return LogQueryShareTokenResponse{}, err
+	}
+	payload, err := json.Marshal(result)
+	if err != nil {
+		return LogQueryShareTokenResponse{}, err
+	}
+	now := time.Now().UTC()
+	ttl := s.settings.ShareTTLMinutes(ctx)
+	token, err := s.generateUniqueToken(ctx, "log_query_share_tokens")
+	if err != nil {
+		return LogQueryShareTokenResponse{}, err
+	}
+	expiresAt := now.Add(time.Duration(ttl) * time.Minute)
+	_, err = s.db.ExecContext(ctx, `
+		insert into log_query_share_tokens (token, created_at, expires_at, payload_json)
+		values (?, ?, ?, ?)
+	`, token, now, expiresAt, string(payload))
+	if err != nil {
+		return LogQueryShareTokenResponse{}, err
+	}
+	return LogQueryShareTokenResponse{
+		ShareTokenResponse: ShareTokenResponse{
+			Token:      token,
+			SharePath:  "/share/logs/" + token,
+			ExpiresAt:  expiresAt,
+			TTLMinutes: ttl,
+			FromDate:   result.FromDate,
+			ToDate:     result.ToDate,
+		},
+		Result: result,
+	}, nil
+}
+
+func (s *Service) LogQueryDetails(ctx context.Context, token string) (LogQueryShareDetailsResponse, error) {
+	token = strings.TrimSpace(token)
+	var payload string
+	var createdAt, expiresAt time.Time
+	err := s.db.QueryRowContext(ctx, `
+		select payload_json, created_at, expires_at
+		from log_query_share_tokens
+		where token = ?
+	`, token).Scan(&payload, &createdAt, &expiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return LogQueryShareDetailsResponse{}, auth.NewHTTPError(httpStatusNotFound, "链接不存在")
+	}
+	if err != nil {
+		return LogQueryShareDetailsResponse{}, err
+	}
+	if !expiresAt.After(time.Now().UTC()) {
+		return LogQueryShareDetailsResponse{}, auth.NewHTTPError(httpStatusGone, "链接已过期，请重新在群里查询")
+	}
+	var result importer.PublicCoordinateLogQueryView
+	if err := json.Unmarshal([]byte(payload), &result); err != nil {
+		return LogQueryShareDetailsResponse{}, err
+	}
+	sanitizeSharedLogRows(&result)
+	return LogQueryShareDetailsResponse{
+		PublicCoordinateLogQueryView: result,
+		ExpiresAt:                    expiresAt,
+		TTLMinutes:                   ttlMinutes(createdAt, expiresAt),
+	}, nil
+}
+
+func sanitizeSharedLogRows(result *importer.PublicCoordinateLogQueryView) {
+	for index := range result.Rows {
+		result.Rows[index].FilePath = ""
+	}
 }
 
 func (s *Service) CreateRankingToken(ctx context.Context, rankingType string, limit int, from, to *time.Time) (ShareTokenResponse, error) {
@@ -905,6 +999,9 @@ func (s *Service) deleteExpiredTokens(ctx context.Context) error {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `delete from ranking_share_tokens where expires_at < ?`, now); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `delete from log_query_share_tokens where expires_at < ?`, now); err != nil {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `delete from xray_share_tokens where expires_at < ?`, now); err != nil {

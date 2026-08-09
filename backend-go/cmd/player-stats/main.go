@@ -52,7 +52,7 @@ func main() {
 	importJobs := importer.NewJobService(importService)
 	logQueryService := importer.NewLogQueryService(importService)
 	xrayService := importer.NewXrayAnalysisService(importService)
-	shareService := share.NewService(db, cfg, settingsService, statsService, xrayService)
+	shareService := share.NewService(db, cfg, settingsService, statsService, xrayService, logQueryService)
 	autoScheduler := importer.NewAutoTaskScheduler(settingsService, importService, logger, cfg.Location)
 	autoScheduler.Start()
 	defer autoScheduler.Stop()

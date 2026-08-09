@@ -22,7 +22,7 @@ const (
 	defaultLogQueryPage    = 100
 	maxLogQueryPageSize    = 500
 	defaultPublicLogLimit  = 8
-	maxPublicLogLimit      = 20
+	maxPublicLogLimit      = 5000
 	defaultPublicLogDays   = 7
 	maxPublicLogDays       = 365
 	maxPublicLogRadius     = 100
@@ -95,13 +95,13 @@ type LogQueryView struct {
 }
 
 type PublicCoordinateLogQueryRequest struct {
-	ServerID string
-	X        float64
-	Y        float64
-	Z        float64
-	Radius   float64
-	Limit    int
-	Days     int
+	ServerID string  `json:"serverId"`
+	X        float64 `json:"x"`
+	Y        float64 `json:"y"`
+	Z        float64 `json:"z"`
+	Radius   float64 `json:"radius"`
+	Limit    int     `json:"limit"`
+	Days     int     `json:"days"`
 }
 
 type PublicCoordinateLogQueryView struct {
@@ -300,7 +300,7 @@ func scanPublicCoordinateFile(file RemoteLogFile, criteria logQueryCriteria, res
 			continue
 		}
 		result.ScannedRows++
-		if criteria.matches(columns) {
+		if criteria.matches(columns) && parseAction(valueAt(columns, 3)) != "" {
 			result.MatchedRows++
 			result.Rows = append(result.Rows, logQueryRow(file, lineNumber, columns))
 		}

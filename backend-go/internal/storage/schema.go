@@ -11,7 +11,22 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 			return err
 		}
 	}
-	return nil
+	return ensureSyncConfigColumn(ctx, db, "log_query_hourly_limit", "INT NOT NULL DEFAULT 5")
+}
+
+func ensureSyncConfigColumn(ctx context.Context, db *sql.DB, columnName, definition string) error {
+	var count int
+	if err := db.QueryRowContext(ctx, `
+		select count(*) from information_schema.columns
+		where table_schema = database() and table_name = 'sync_config' and column_name = ?
+	`, columnName).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+	_, err := db.ExecContext(ctx, "alter table sync_config add column "+columnName+" "+definition)
+	return err
 }
 
 var schemaStatements = []string{
@@ -47,6 +62,7 @@ var schemaStatements = []string{
 		auto_import_sub_time VARCHAR(5),
 		astrbot_api_key VARCHAR(128),
 		share_ttl_minutes INT NOT NULL DEFAULT 60,
+		log_query_hourly_limit INT NOT NULL DEFAULT 5,
 		PRIMARY KEY (id)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 
@@ -225,6 +241,15 @@ var schemaStatements = []string{
 		expires_at DATETIME(6) NOT NULL,
 		PRIMARY KEY (token),
 		KEY idx_ranking_share_tokens_expires (expires_at)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+	`CREATE TABLE IF NOT EXISTS log_query_share_tokens (
+		token VARCHAR(64) NOT NULL,
+		created_at DATETIME(6) NOT NULL,
+		expires_at DATETIME(6) NOT NULL,
+		payload_json LONGTEXT NOT NULL,
+		PRIMARY KEY (token),
+		KEY idx_log_query_share_tokens_expires (expires_at)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 
 	`CREATE TABLE IF NOT EXISTS xray_share_tokens (
