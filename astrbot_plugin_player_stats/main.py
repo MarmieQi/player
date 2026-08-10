@@ -79,7 +79,7 @@ class PlayerStatsPlugin(Star):
 
         canonical_game_id = check.get("player_name") or game_id
         await self.put_kv_data(self._binding_key(event), canonical_game_id)
-        await self.put_kv_data(self._last_info_query_key(event), "")
+        await self.put_kv_data(self._rebind_cooldown_key(event), "")
         servers = "、".join(check.get("servers") or [])
         yield event.plain_result(
             f"已绑定游戏 ID：{canonical_game_id}\n"
@@ -103,10 +103,7 @@ class PlayerStatsPlugin(Star):
 
         message, query_succeeded = await self._query_and_format_all(bound_game_id)
         if query_succeeded:
-            last_query_key = self._last_info_query_key(event)
-            last_query_at = str(await self.get_kv_data(last_query_key, "") or "").strip()
-            if not last_query_at:
-                await self.put_kv_data(last_query_key, datetime.now(timezone.utc).isoformat())
+            await self._start_rebind_cooldown(event)
         yield event.plain_result(message)
 
     @filter.command("肝帝榜", alias={"排行榜", "方块排行榜"})
@@ -212,6 +209,8 @@ class PlayerStatsPlugin(Star):
             f"public coordinate log query finished: actor={query_actor} mode={mode} "
             f"server={server['serverId']} matched={int(result.get('matchedRows') or 0)}"
         )
+        if not is_group_admin:
+            await self._start_rebind_cooldown(event)
         lines = [
             f"交互坐标日志：{coord_text}",
             f"查询半径：{self._format_coord_value(radius)} 格",
@@ -1284,9 +1283,18 @@ class PlayerStatsPlugin(Star):
         sender_id = event.get_sender_id()
         return f"player_stats_binding:{sender_id}"
 
-    def _last_info_query_key(self, event: AstrMessageEvent) -> str:
+    def _rebind_cooldown_key(self, event: AstrMessageEvent) -> str:
         sender_id = event.get_sender_id()
+        # Keep the historical key so existing cooldown records remain valid after upgrades.
         return f"player_stats_last_info_query:{sender_id}"
+
+    async def _start_rebind_cooldown(self, event: AstrMessageEvent) -> None:
+        if self._rebind_cooldown_hours() <= 0:
+            return
+        last_query_key = self._rebind_cooldown_key(event)
+        last_query_at = str(await self.get_kv_data(last_query_key, "") or "").strip()
+        if not last_query_at:
+            await self.put_kv_data(last_query_key, datetime.now(timezone.utc).isoformat())
 
     async def _rebind_cooldown_message(self, event: AstrMessageEvent) -> str:
         bound_game_id = str(await self.get_kv_data(self._binding_key(event), "") or "").strip()
@@ -1297,7 +1305,7 @@ class PlayerStatsPlugin(Star):
         if cooldown_hours <= 0:
             return ""
 
-        raw_last_query_at = str(await self.get_kv_data(self._last_info_query_key(event), "") or "").strip()
+        raw_last_query_at = str(await self.get_kv_data(self._rebind_cooldown_key(event), "") or "").strip()
         if not raw_last_query_at:
             return ""
 
