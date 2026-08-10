@@ -84,7 +84,12 @@ func (s *Server) createLogQueryShareToken(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) logQueryShareDetails(w http.ResponseWriter, r *http.Request) {
-	response, err := s.shareService.LogQueryDetails(r.Context(), r.PathValue("token"))
+	response, err := s.shareService.LogQueryDetails(
+		r.Context(),
+		r.PathValue("token"),
+		queryInt(r, "page", 1),
+		queryInt(r, "pageSize", 50),
+	)
 	s.writeHTTPErrorResult(w, http.StatusOK, response, err)
 }
 

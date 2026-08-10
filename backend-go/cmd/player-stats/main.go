@@ -53,6 +53,9 @@ func main() {
 	logQueryService := importer.NewLogQueryService(importService)
 	xrayService := importer.NewXrayAnalysisService(importService)
 	shareService := share.NewService(db, cfg, settingsService, statsService, xrayService, logQueryService)
+	cleanupCtx, cleanupCancel := context.WithCancel(context.Background())
+	go runShareTokenCleanup(cleanupCtx, shareService, logger)
+	defer cleanupCancel()
 	autoScheduler := importer.NewAutoTaskScheduler(settingsService, importService, logger, cfg.Location)
 	autoScheduler.Start()
 	defer autoScheduler.Stop()
@@ -80,5 +83,26 @@ func main() {
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {
 		logger.Error("graceful shutdown failed", "error", err)
+	}
+}
+
+func runShareTokenCleanup(ctx context.Context, service *share.Service, logger *slog.Logger) {
+	cleanup := func() {
+		cleanupCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		if err := service.CleanupExpiredTokens(cleanupCtx); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Warn("expired share token cleanup failed", "error", err)
+		}
+	}
+	cleanup()
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cleanup()
+		}
 	}
 }

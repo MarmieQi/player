@@ -22,6 +22,16 @@ func TestImportedLogFilePathIndexUsesHash(t *testing.T) {
 	}
 }
 
+func TestLogQuerySharePagesCascadeWithToken(t *testing.T) {
+	schema := strings.Join(schemaStatements, "\n")
+	if !strings.Contains(schema, "CREATE TABLE IF NOT EXISTS log_query_share_pages") {
+		t.Fatal("paged log query snapshot table is missing")
+	}
+	if !strings.Contains(schema, "FOREIGN KEY (token) REFERENCES log_query_share_tokens(token) ON DELETE CASCADE") {
+		t.Fatal("paged log query snapshots must be deleted with their token")
+	}
+}
+
 func TestSchemaIndexesFitMySQLUtf8mb4Limit(t *testing.T) {
 	for _, statement := range schemaStatements {
 		table := tableName(statement)

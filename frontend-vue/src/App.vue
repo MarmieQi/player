@@ -84,6 +84,7 @@ const xrayShareOrePositionPageSize = ref(100)
 const logShareToken = ref('')
 const logShareData = ref(null)
 const logShareLoading = ref(false)
+const logSharePageLoading = ref(false)
 const logShareError = ref('')
 const logSharePage = ref(1)
 const logSharePageSize = ref(50)
@@ -228,9 +229,9 @@ const xrayShareRemainingText = computed(() => {
   return `剩余 ${seconds} 秒`
 })
 const logShareRows = computed(() => logShareData.value?.rows || [])
-const logShareTotalPages = computed(() => Math.max(1, Math.ceil(logShareRows.value.length / logSharePageSize.value)))
-const logShareOffset = computed(() => (clampPage(logSharePage.value, logShareTotalPages.value) - 1) * logSharePageSize.value)
-const logSharePagedRows = computed(() => logShareRows.value.slice(logShareOffset.value, logShareOffset.value + logSharePageSize.value))
+const logShareTotalRows = computed(() => Number(logShareData.value?.totalRows ?? logShareData.value?.displayedRows ?? logShareRows.value.length))
+const logShareTotalPages = computed(() => Math.max(1, Number(logShareData.value?.totalPages) || Math.ceil(logShareTotalRows.value / logSharePageSize.value)))
+const logSharePagedRows = computed(() => logShareRows.value)
 const logShareRemainingMs = computed(() => {
   if (!logShareData.value?.expiresAt) return 0
   return Math.max(0, new Date(logShareData.value.expiresAt).getTime() - shareNow.value)
@@ -429,16 +430,34 @@ function openSharePageFromPath() {
 }
 
 async function loadLogShareDetails() {
-  logShareLoading.value = true
+  const initialLoad = !logShareData.value
+  logShareLoading.value = initialLoad
+  logSharePageLoading.value = !initialLoad
   logShareError.value = ''
   try {
     if (import.meta.env.DEV && logShareToken.value === 'preview') {
       const { createLogSharePreviewData } = await import('./log-share-preview')
-      logShareData.value = createLogSharePreviewData()
+      const preview = createLogSharePreviewData()
+      const totalRows = preview.rows.length
+      const totalPages = Math.max(1, Math.ceil(totalRows / logSharePageSize.value))
+      logSharePage.value = clampPage(logSharePage.value, totalPages)
+      const start = (logSharePage.value - 1) * logSharePageSize.value
+      logShareData.value = {
+        ...preview,
+        rows: preview.rows.slice(start, start + logSharePageSize.value),
+        page: logSharePage.value,
+        pageSize: logSharePageSize.value,
+        totalPages,
+        totalRows
+      }
     } else {
-      logShareData.value = await apiGet(`/api/share/log-query/${encodeURIComponent(logShareToken.value)}`, {}, { auth: false })
+      logShareData.value = await apiGet(`/api/share/log-query/${encodeURIComponent(logShareToken.value)}`, {
+        page: logSharePage.value,
+        pageSize: logSharePageSize.value
+      }, { auth: false })
+      logSharePage.value = Number(logShareData.value.page) || 1
+      logSharePageSize.value = Number(logShareData.value.pageSize) || logSharePageSize.value
     }
-    logSharePage.value = 1
     startShareTicker()
   } catch (err) {
     logShareData.value = null
@@ -446,6 +465,7 @@ async function loadLogShareDetails() {
     stopShareTicker()
   } finally {
     logShareLoading.value = false
+    logSharePageLoading.value = false
   }
 }
 
@@ -1985,14 +2005,19 @@ function pagedXrayRows(rows, page, pageSize) {
   return rows.slice(start, start + pageSize)
 }
 
-function setLogSharePage(page) {
-  logSharePage.value = clampPage(page, logShareTotalPages.value)
+async function setLogSharePage(page) {
+  const nextPage = clampPage(page, logShareTotalPages.value)
+  if (nextPage === logSharePage.value || logSharePageLoading.value) return
+  logSharePage.value = nextPage
+  await loadLogShareDetails()
 }
 
-function setLogSharePageSize(pageSize) {
+async function setLogSharePageSize(pageSize) {
+  if (logSharePageLoading.value) return
   const parsed = Number.parseInt(pageSize, 10)
   logSharePageSize.value = LOG_SHARE_PAGE_SIZE_OPTIONS.includes(parsed) ? parsed : 50
   logSharePage.value = 1
+  await loadLogShareDetails()
 }
 
 function setXrayShareOrePositionPage(page) {
@@ -3002,7 +3027,7 @@ function toggleAllImportFileSelection(checked) {
 
       <section class="log-share-summary">
         <article><Search :size="19" /><span>匹配日志</span><strong>{{ formatNumber(logShareData.matchedRows || 0) }}</strong></article>
-        <article><FileText :size="19" /><span>日志总数</span><strong>{{ formatNumber(logShareRows.length) }}</strong></article>
+        <article><FileText :size="19" /><span>日志总数</span><strong>{{ formatNumber(logShareTotalRows) }}</strong></article>
         <article><Database :size="19" /><span>扫描文件</span><strong>{{ formatNumber(logShareData.scannedFiles || 0) }}</strong></article>
         <article><Clock :size="19" /><span>链接状态</span><strong>{{ logShareRemainingText }}</strong></article>
       </section>
@@ -3013,12 +3038,7 @@ function toggleAllImportFileSelection(checked) {
             <p>LOG ENTRIES</p>
             <h2>日志明细</h2>
           </div>
-          <span v-if="Number(logShareData.matchedRows || 0) > logShareRows.length">
-            匹配 {{ formatNumber(logShareData.matchedRows) }} 条，单次链接最多加载 {{ formatNumber(logShareRows.length) }} 条
-          </span>
-          <span v-else>
-            已加载全部 {{ formatNumber(logShareRows.length) }} 条日志
-          </span>
+          <span>共 {{ formatNumber(logShareTotalRows) }} 条日志，当前按页加载</span>
         </div>
 
         <div v-if="logSharePagedRows.length" class="log-share-table-wrap">
@@ -3048,16 +3068,16 @@ function toggleAllImportFileSelection(checked) {
 
         <p v-else class="log-share-empty">{{ logShareData.message || '没有匹配日志' }}</p>
 
-        <div v-if="logShareRows.length" class="log-share-pagination">
-          <span>第 {{ clampPage(logSharePage, logShareTotalPages) }} / {{ logShareTotalPages }} 页，共 {{ formatNumber(logShareRows.length) }} 条</span>
+        <div v-if="logShareTotalRows" class="log-share-pagination">
+          <span>第 {{ clampPage(logSharePage, logShareTotalPages) }} / {{ logShareTotalPages }} 页，共 {{ formatNumber(logShareTotalRows) }} 条</span>
           <div>
             <label>每页
-              <select :value="logSharePageSize" @change="setLogSharePageSize($event.target.value)">
+              <select :value="logSharePageSize" :disabled="logSharePageLoading" @change="setLogSharePageSize($event.target.value)">
                 <option v-for="size in LOG_SHARE_PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</option>
               </select>
             </label>
-            <button type="button" title="上一页" aria-label="上一页" :disabled="logSharePage <= 1" @click="setLogSharePage(logSharePage - 1)"><ChevronLeft :size="18" /></button>
-            <button type="button" title="下一页" aria-label="下一页" :disabled="logSharePage >= logShareTotalPages" @click="setLogSharePage(logSharePage + 1)"><ChevronRight :size="18" /></button>
+            <button type="button" title="上一页" aria-label="上一页" :disabled="logSharePageLoading || logSharePage <= 1" @click="setLogSharePage(logSharePage - 1)"><ChevronLeft :size="18" /></button>
+            <button type="button" title="下一页" aria-label="下一页" :disabled="logSharePageLoading || logSharePage >= logShareTotalPages" @click="setLogSharePage(logSharePage + 1)"><ChevronRight :size="18" /></button>
           </div>
         </div>
       </section>

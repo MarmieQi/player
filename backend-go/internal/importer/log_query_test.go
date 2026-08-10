@@ -191,6 +191,18 @@ func TestNormalizePublicLogLimitSupportsShareSnapshot(t *testing.T) {
 	}
 }
 
+func TestPublicLogRowsIncludeAllBypassesPublicResponseLimit(t *testing.T) {
+	rows := make([]LogQueryRow, maxPublicLogLimit+25)
+	limited := publicLogRowsForRequest(rows, PublicCoordinateLogQueryRequest{Limit: maxPublicLogLimit + 25})
+	if len(limited) != maxPublicLogLimit {
+		t.Fatalf("public rows = %d, want capped %d", len(limited), maxPublicLogLimit)
+	}
+	all := publicLogRowsForRequest(rows, PublicCoordinateLogQueryRequest{IncludeAll: true})
+	if len(all) != len(rows) {
+		t.Fatalf("snapshot rows = %d, want all %d", len(all), len(rows))
+	}
+}
+
 func TestPublicLogDateRangeUsesLatestLocalLogFile(t *testing.T) {
 	location := time.FixedZone("CST", 8*60*60)
 	files := []RemoteLogFile{

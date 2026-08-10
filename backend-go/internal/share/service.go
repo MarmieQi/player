@@ -1,12 +1,15 @@
 package share
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"sort"
 	"strings"
 	"sync"
@@ -48,7 +51,9 @@ func NewService(db *sql.DB, cfg config.Config, settingsService *settings.Service
 }
 
 const xrayGroupMessageTTL = 10 * time.Minute
-const logQueryShareLimit = 5000
+const logQuerySnapshotPageRows = 200
+const defaultLogQueryPageSize = 50
+const maxLogQueryPageSize = 200
 
 type queuedXrayGroupMessage struct {
 	message   XrayGroupMessageResponse
@@ -73,6 +78,10 @@ type LogQueryShareDetailsResponse struct {
 	importer.PublicCoordinateLogQueryView
 	ExpiresAt  time.Time `json:"expiresAt"`
 	TTLMinutes int       `json:"ttlMinutes"`
+	Page       int       `json:"page"`
+	PageSize   int       `json:"pageSize"`
+	TotalPages int       `json:"totalPages"`
+	TotalRows  int       `json:"totalRows"`
 }
 
 type PlayerDetailsResponse struct {
@@ -265,7 +274,7 @@ func (s *Service) CreateLogQueryToken(ctx context.Context, request importer.Publ
 	if s.logs == nil {
 		return LogQueryShareTokenResponse{}, errors.New("log query service is unavailable")
 	}
-	request.Limit = logQueryShareLimit
+	request.IncludeAll = true
 	result, err := s.logs.PublicCoordinate(ctx, request)
 	if err != nil {
 		return LogQueryShareTokenResponse{}, err
@@ -274,6 +283,9 @@ func (s *Service) CreateLogQueryToken(ctx context.Context, request importer.Publ
 	if err := s.deleteExpiredTokens(ctx); err != nil {
 		return LogQueryShareTokenResponse{}, err
 	}
+	rows := result.Rows
+	result.Rows = []importer.LogQueryRow{}
+	result.DisplayedRows = len(rows)
 	payload, err := json.Marshal(result)
 	if err != nil {
 		return LogQueryShareTokenResponse{}, err
@@ -285,11 +297,33 @@ func (s *Service) CreateLogQueryToken(ctx context.Context, request importer.Publ
 		return LogQueryShareTokenResponse{}, err
 	}
 	expiresAt := now.Add(time.Duration(ttl) * time.Minute)
-	_, err = s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return LogQueryShareTokenResponse{}, err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `
 		insert into log_query_share_tokens (token, created_at, expires_at, payload_json)
 		values (?, ?, ?, ?)
 	`, token, now, expiresAt, string(payload))
 	if err != nil {
+		return LogQueryShareTokenResponse{}, err
+	}
+	for start := 0; start < len(rows); start += logQuerySnapshotPageRows {
+		end := min(start+logQuerySnapshotPageRows, len(rows))
+		compressed, err := compressLogQueryRows(rows[start:end])
+		if err != nil {
+			return LogQueryShareTokenResponse{}, err
+		}
+		_, err = tx.ExecContext(ctx, `
+			insert into log_query_share_pages (token, page_number, row_count, payload_gzip)
+			values (?, ?, ?, ?)
+		`, token, start/logQuerySnapshotPageRows+1, end-start, compressed)
+		if err != nil {
+			return LogQueryShareTokenResponse{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
 		return LogQueryShareTokenResponse{}, err
 	}
 	return LogQueryShareTokenResponse{
@@ -305,7 +339,7 @@ func (s *Service) CreateLogQueryToken(ctx context.Context, request importer.Publ
 	}, nil
 }
 
-func (s *Service) LogQueryDetails(ctx context.Context, token string) (LogQueryShareDetailsResponse, error) {
+func (s *Service) LogQueryDetails(ctx context.Context, token string, page, pageSize int) (LogQueryShareDetailsResponse, error) {
 	token = strings.TrimSpace(token)
 	var payload string
 	var createdAt, expiresAt time.Time
@@ -321,18 +355,127 @@ func (s *Service) LogQueryDetails(ctx context.Context, token string) (LogQuerySh
 		return LogQueryShareDetailsResponse{}, err
 	}
 	if !expiresAt.After(time.Now().UTC()) {
+		_, _ = s.db.ExecContext(ctx, `delete from log_query_share_tokens where token = ?`, token)
 		return LogQueryShareDetailsResponse{}, auth.NewHTTPError(httpStatusGone, "链接已过期，请重新在群里查询")
 	}
 	var result importer.PublicCoordinateLogQueryView
 	if err := json.Unmarshal([]byte(payload), &result); err != nil {
 		return LogQueryShareDetailsResponse{}, err
 	}
+	pageSize = normalizeLogQueryPageSize(pageSize)
+	var snapshotPages, snapshotRows int
+	if err := s.db.QueryRowContext(ctx, `
+		select count(*), coalesce(sum(row_count), 0)
+		from log_query_share_pages where token = ?
+	`, token).Scan(&snapshotPages, &snapshotRows); err != nil {
+		return LogQueryShareDetailsResponse{}, err
+	}
+	totalRows := result.DisplayedRows
+	var pageRows []importer.LogQueryRow
+	if snapshotPages > 0 {
+		totalRows = snapshotRows
+		totalPages := max(1, (totalRows+pageSize-1)/pageSize)
+		page = max(1, min(page, totalPages))
+		start := (page - 1) * pageSize
+		end := min(start+pageSize, totalRows)
+		firstSnapshotPage := start/logQuerySnapshotPageRows + 1
+		lastSnapshotPage := (max(start, end-1))/logQuerySnapshotPageRows + 1
+		rows, err := s.logQuerySnapshotRows(ctx, token, firstSnapshotPage, lastSnapshotPage)
+		if err != nil {
+			return LogQueryShareDetailsResponse{}, err
+		}
+		localStart := start - (firstSnapshotPage-1)*logQuerySnapshotPageRows
+		localEnd := min(localStart+(end-start), len(rows))
+		if localStart > len(rows) || localEnd-localStart != end-start {
+			return LogQueryShareDetailsResponse{}, errors.New("log query snapshot is incomplete")
+		}
+		if localStart < localEnd {
+			pageRows = rows[localStart:localEnd]
+		}
+	} else {
+		// Compatibility with links created before paged snapshots were introduced.
+		allRows := result.Rows
+		totalRows = len(allRows)
+		totalPages := max(1, (totalRows+pageSize-1)/pageSize)
+		page = max(1, min(page, totalPages))
+		start := min((page-1)*pageSize, totalRows)
+		pageRows = allRows[start:min(start+pageSize, totalRows)]
+	}
+	result.Rows = pageRows
+	result.DisplayedRows = totalRows
 	sanitizeSharedLogRows(&result)
+	totalPages := max(1, (totalRows+pageSize-1)/pageSize)
 	return LogQueryShareDetailsResponse{
 		PublicCoordinateLogQueryView: result,
 		ExpiresAt:                    expiresAt,
 		TTLMinutes:                   ttlMinutes(createdAt, expiresAt),
+		Page:                         page,
+		PageSize:                     pageSize,
+		TotalPages:                   totalPages,
+		TotalRows:                    totalRows,
 	}, nil
+}
+
+func compressLogQueryRows(rows []importer.LogQueryRow) ([]byte, error) {
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	if err := json.NewEncoder(writer).Encode(rows); err != nil {
+		_ = writer.Close()
+		return nil, err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
+	return compressed.Bytes(), nil
+}
+
+func decompressLogQueryRows(payload []byte) ([]importer.LogQueryRow, error) {
+	reader, err := gzip.NewReader(bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	decoded, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, err
+	}
+	var rows []importer.LogQueryRow
+	if err := json.Unmarshal(decoded, &rows); err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func (s *Service) logQuerySnapshotRows(ctx context.Context, token string, fromPage, toPage int) ([]importer.LogQueryRow, error) {
+	pages, err := s.db.QueryContext(ctx, `
+		select payload_gzip from log_query_share_pages
+		where token = ? and page_number between ? and ?
+		order by page_number
+	`, token, fromPage, toPage)
+	if err != nil {
+		return nil, err
+	}
+	defer pages.Close()
+	result := make([]importer.LogQueryRow, 0, (toPage-fromPage+1)*logQuerySnapshotPageRows)
+	for pages.Next() {
+		var payload []byte
+		if err := pages.Scan(&payload); err != nil {
+			return nil, err
+		}
+		rows, err := decompressLogQueryRows(payload)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, rows...)
+	}
+	return result, pages.Err()
+}
+
+func normalizeLogQueryPageSize(pageSize int) int {
+	if pageSize <= 0 {
+		return defaultLogQueryPageSize
+	}
+	return min(pageSize, maxLogQueryPageSize)
 }
 
 func sanitizeSharedLogRows(result *importer.PublicCoordinateLogQueryView) {
@@ -1008,6 +1151,10 @@ func (s *Service) deleteExpiredTokens(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Service) CleanupExpiredTokens(ctx context.Context) error {
+	return s.deleteExpiredTokens(ctx)
 }
 
 func (s *Service) generateUniqueToken(ctx context.Context, table string) (string, error) {

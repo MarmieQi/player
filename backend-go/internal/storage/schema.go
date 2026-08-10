@@ -277,6 +277,15 @@ var schemaStatements = []string{
 		KEY idx_log_query_share_tokens_expires (expires_at)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 
+	`CREATE TABLE IF NOT EXISTS log_query_share_pages (
+		token VARCHAR(64) NOT NULL,
+		page_number INT NOT NULL,
+		row_count INT NOT NULL,
+		payload_gzip LONGBLOB NOT NULL,
+		PRIMARY KEY (token, page_number),
+		CONSTRAINT fk_log_query_share_pages_token FOREIGN KEY (token) REFERENCES log_query_share_tokens(token) ON DELETE CASCADE
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
 	`CREATE TABLE IF NOT EXISTS xray_share_tokens (
 		token VARCHAR(64) NOT NULL,
 		server_id VARCHAR(64) NOT NULL,

@@ -95,13 +95,14 @@ type LogQueryView struct {
 }
 
 type PublicCoordinateLogQueryRequest struct {
-	ServerID string  `json:"serverId"`
-	X        float64 `json:"x"`
-	Y        float64 `json:"y"`
-	Z        float64 `json:"z"`
-	Radius   float64 `json:"radius"`
-	Limit    int     `json:"limit"`
-	Days     int     `json:"days"`
+	ServerID   string  `json:"serverId"`
+	X          float64 `json:"x"`
+	Y          float64 `json:"y"`
+	Z          float64 `json:"z"`
+	Radius     float64 `json:"radius"`
+	Limit      int     `json:"limit"`
+	Days       int     `json:"days"`
+	IncludeAll bool    `json:"-"`
 }
 
 type PublicCoordinateLogQueryView struct {
@@ -264,10 +265,7 @@ func (s *LogQueryService) PublicCoordinate(ctx context.Context, request PublicCo
 		}
 		return result.Rows[i].LineNumber > result.Rows[j].LineNumber
 	})
-	limit := normalizePublicLogLimit(request.Limit)
-	if len(result.Rows) > limit {
-		result.Rows = result.Rows[:limit]
-	}
+	result.Rows = publicLogRowsForRequest(result.Rows, request)
 	result.DisplayedRows = len(result.Rows)
 	switch {
 	case result.ScannedFiles == 0:
@@ -278,6 +276,17 @@ func (s *LogQueryService) PublicCoordinate(ctx context.Context, request PublicCo
 		result.Message = "匹配到 " + strconvI64(result.MatchedRows) + " 条日志，显示最近 " + strconvI64(int64(result.DisplayedRows)) + " 条"
 	}
 	return result, nil
+}
+
+func publicLogRowsForRequest(rows []LogQueryRow, request PublicCoordinateLogQueryRequest) []LogQueryRow {
+	if request.IncludeAll {
+		return rows
+	}
+	limit := normalizePublicLogLimit(request.Limit)
+	if len(rows) > limit {
+		return rows[:limit]
+	}
+	return rows
 }
 
 func scanPublicCoordinateFile(file RemoteLogFile, criteria logQueryCriteria, result *PublicCoordinateLogQueryView) error {
