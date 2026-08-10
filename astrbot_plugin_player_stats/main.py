@@ -177,8 +177,7 @@ class PlayerStatsPlugin(Star):
             return
 
         if not is_group_admin:
-            hourly_limit = await self._fetch_log_query_hourly_limit()
-            quota = self._consume_log_query_quota(presence["player_name"], hourly_limit)
+            quota = self._consume_log_query_quota(presence["player_name"])
             if not quota["ok"]:
                 self._forget_duplicate_log_query(dedupe_key)
                 yield event.plain_result(
@@ -492,20 +491,6 @@ class PlayerStatsPlugin(Star):
             )
             response.raise_for_status()
             return response.json()
-
-    async def _fetch_log_query_hourly_limit(self) -> int:
-        try:
-            async with httpx.AsyncClient(timeout=float(self.config.get("timeout_seconds", 8))) as client:
-                response = await client.get(
-                    f"{self._api_base_url()}/api/share/log-query-settings",
-                    headers=self._auth_headers(),
-                )
-                response.raise_for_status()
-                data = response.json()
-                return max(1, min(int(data.get("ordinaryMemberHourlyLimit") or 5), 60))
-        except Exception as ex:
-            logger.warning(f"load log query settings failed, use default hourly limit: {ex}")
-            return 5
 
     def _log_query_share_link(self, data: dict[str, Any]) -> str:
         share_path = str(data.get("sharePath") or "").strip()
@@ -1163,8 +1148,8 @@ class PlayerStatsPlugin(Star):
             "说明：半径可省略，范围 0-100 格。"
         )
 
-    def _consume_log_query_quota(self, game_id: str, limit: int) -> dict[str, Any]:
-        limit = max(1, min(int(limit), 60))
+    def _consume_log_query_quota(self, game_id: str) -> dict[str, Any]:
+        limit = self._public_log_hourly_limit()
         key = (game_id or "").strip().lower()
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=1)
@@ -1200,6 +1185,12 @@ class PlayerStatsPlugin(Star):
             return max(1, min(int(self.config.get("ranking_limit", 10)), 20))
         except (TypeError, ValueError):
             return 10
+
+    def _public_log_hourly_limit(self) -> int:
+        try:
+            return max(1, min(int(self.config.get("log_query_hourly_limit", 5)), 60))
+        except (TypeError, ValueError):
+            return 5
 
     def _public_log_recent_days(self) -> int:
         try:

@@ -97,7 +97,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/share/ranking-tokens", s.createRankingShareToken)
 	s.mux.HandleFunc("GET /api/share/ranking/{token}", s.rankingShareDetails)
 	s.mux.HandleFunc("POST /api/share/log-query-tokens", s.createLogQueryShareToken)
-	s.mux.HandleFunc("GET /api/share/log-query-settings", s.logQuerySettings)
 	s.mux.HandleFunc("GET /api/share/log-query/{token}", s.logQueryShareDetails)
 	s.mux.HandleFunc("POST /api/share/xray/send-to-group", s.sendXrayToGroup)
 	s.mux.HandleFunc("GET /api/share/xray/{token}", s.xrayShareDetails)

@@ -11,7 +11,7 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 			return err
 		}
 	}
-	if _, err := ensureSyncConfigColumn(ctx, db, "log_query_hourly_limit", "INT NOT NULL DEFAULT 5"); err != nil {
+	if err := dropSyncConfigColumn(ctx, db, "log_query_hourly_limit"); err != nil {
 		return err
 	}
 	added, err := ensureSyncConfigColumn(ctx, db, "log_query_share_ttl_minutes", "INT NOT NULL DEFAULT 60")
@@ -21,6 +21,21 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	if added {
 		_, err = db.ExecContext(ctx, `update sync_config set log_query_share_ttl_minutes = share_ttl_minutes`)
 	}
+	return err
+}
+
+func dropSyncConfigColumn(ctx context.Context, db *sql.DB, columnName string) error {
+	var count int
+	if err := db.QueryRowContext(ctx, `
+		select count(*) from information_schema.columns
+		where table_schema = database() and table_name = 'sync_config' and column_name = ?
+	`, columnName).Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		return nil
+	}
+	_, err := db.ExecContext(ctx, "alter table sync_config drop column "+columnName)
 	return err
 }
 
@@ -72,7 +87,6 @@ var schemaStatements = []string{
 		auto_import_sub_time VARCHAR(5),
 		astrbot_api_key VARCHAR(128),
 		share_ttl_minutes INT NOT NULL DEFAULT 60,
-		log_query_hourly_limit INT NOT NULL DEFAULT 5,
 		log_query_share_ttl_minutes INT NOT NULL DEFAULT 60,
 		PRIMARY KEY (id)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,

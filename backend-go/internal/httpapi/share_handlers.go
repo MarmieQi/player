@@ -83,14 +83,6 @@ func (s *Server) createLogQueryShareToken(w http.ResponseWriter, r *http.Request
 	s.writeHTTPErrorResult(w, http.StatusCreated, response, err)
 }
 
-func (s *Server) logQuerySettings(w http.ResponseWriter, r *http.Request) {
-	if !s.authService.MatchesAstrBotKey(r.Context(), r.Header.Get(settings.AstrBotAPIKeyHeader)) {
-		writeError(w, http.StatusUnauthorized, "插件密钥无效")
-		return
-	}
-	writeJSON(w, http.StatusOK, s.settingsService.LogQuerySettings(r.Context()))
-}
-
 func (s *Server) logQueryShareDetails(w http.ResponseWriter, r *http.Request) {
 	response, err := s.shareService.LogQueryDetails(r.Context(), r.PathValue("token"))
 	s.writeHTTPErrorResult(w, http.StatusOK, response, err)

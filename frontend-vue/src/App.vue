@@ -1616,7 +1616,6 @@ function normalizeSyncConfig(config) {
     ...config,
     skipToday: config.skipToday !== false,
     shareTtlMinutes: normalizeShareTtlMinutes(config.shareTtlMinutes),
-    logQueryHourlyLimit: normalizeLogQueryHourlyLimit(config.logQueryHourlyLimit),
     logQueryShareTtlMinutes: normalizeShareTtlMinutes(config.logQueryShareTtlMinutes),
     autoTasks: Array.isArray(config.autoTasks) && config.autoTasks.length
       ? config.autoTasks.map(normalizeAutoTask)
@@ -1647,12 +1646,6 @@ function normalizeShareTtlMinutes(value) {
   const minutes = Number(value)
   if (!Number.isFinite(minutes) || minutes <= 0) return 60
   return Math.max(5, Math.min(Math.round(minutes), 10080))
-}
-
-function normalizeLogQueryHourlyLimit(value) {
-  const limit = Number(value)
-  if (!Number.isFinite(limit) || limit <= 0) return 5
-  return Math.max(1, Math.min(Math.round(limit), 60))
 }
 
 function defaultSyncTime(serverId) {
@@ -3390,15 +3383,11 @@ function toggleAllImportFileSelection(checked) {
               <input type="number" min="5" max="10080" step="1" v-model.number="syncConfig.shareTtlMinutes" />
             </label>
             <label>
-              <span>普通成员查日志次数（每小时）</span>
-              <input type="number" min="1" max="60" step="1" v-model.number="syncConfig.logQueryHourlyLimit" />
-            </label>
-            <label>
               <span>查日志链接有效期（分钟）</span>
               <input type="number" min="5" max="10080" step="1" v-model.number="syncConfig.logQueryShareTtlMinutes" />
             </label>
             <p class="settings-hint">把这个密钥填到 AstrBot 插件配置的 api_key 中。插件只用它查询玩家统计，不需要管理员登录 token。</p>
-            <p class="settings-hint">QQ群主和群管理员查询日志不限制次数；普通成员按绑定游戏 ID 限制，范围每小时 1-60 次。</p>
+            <p class="settings-hint">普通成员的每小时查日志次数在 AstrBot 插件配置中调整；QQ群主和群管理员不受限制。</p>
             <p class="settings-hint">两个链接有效期分别控制：通用有效期用于玩家信息和排行榜，查日志有效期仅用于服务器日志页面；范围均为 5 分钟到 7 天。</p>
             <div class="settings-actions">
               <button class="secondary-button" type="button" :disabled="astrbotKeyLoading || !astrbotKey?.apiKey" @click="copyAstrbotKey">

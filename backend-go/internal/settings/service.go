@@ -35,7 +35,6 @@ type SyncConfigResponse struct {
 	SyncCron                string            `json:"syncCron"`
 	SkipToday               bool              `json:"skipToday"`
 	ShareTTLMinutes         int               `json:"shareTtlMinutes"`
-	LogQueryHourlyLimit     int               `json:"logQueryHourlyLimit"`
 	LogQueryShareTTLMinutes int               `json:"logQueryShareTtlMinutes"`
 	Sources                 []SyncSource      `json:"sources"`
 	AutoTasks               []AutoTaskSetting `json:"autoTasks"`
@@ -74,10 +73,6 @@ type AstrBotKeyResponse struct {
 	HeaderName string `json:"headerName"`
 }
 
-type LogQuerySettingsResponse struct {
-	OrdinaryMemberHourlyLimit int `json:"ordinaryMemberHourlyLimit"`
-}
-
 type RemoteLogFile struct {
 	FileName     string `json:"fileName"`
 	Path         string `json:"path"`
@@ -112,17 +107,16 @@ func (s *Service) SaveSyncConfig(ctx context.Context, request SyncConfigResponse
 		password = request.SMBPassword
 	}
 	shareTTL := NormalizeShareTTL(request.ShareTTLMinutes)
-	logQueryHourlyLimit := NormalizeLogQueryHourlyLimit(request.LogQueryHourlyLimit)
 	logQueryShareTTL := NormalizeShareTTL(request.LogQueryShareTTLMinutes)
 	_, err = s.db.ExecContext(ctx, `
 		update sync_config
 		set smb_host = ?, smb_port = ?, smb_domain = ?, smb_username = ?, smb_password = ?, smb_share = ?,
-		    auto_run = ?, sync_cron = ?, skip_today = ?, share_ttl_minutes = ?, log_query_hourly_limit = ?, log_query_share_ttl_minutes = ?,
+		    auto_run = ?, sync_cron = ?, skip_today = ?, share_ttl_minutes = ?, log_query_share_ttl_minutes = ?,
 		    auto_sync_main_enabled = ?, auto_sync_main_time = ?, auto_import_main_enabled = ?, auto_import_main_time = ?,
 		    auto_sync_sub_enabled = ?, auto_sync_sub_time = ?, auto_import_sub_enabled = ?, auto_import_sub_time = ?
 		where id = 1
 	`, request.SMBHost, defaultPort(request.SMBPort), request.SMBDomain, request.SMBUsername, password, request.SMBShare,
-		request.AutoRun, defaultString(request.SyncCron, "0 30 0 * * *"), request.SkipToday, shareTTL, logQueryHourlyLimit, logQueryShareTTL,
+		request.AutoRun, defaultString(request.SyncCron, "0 30 0 * * *"), request.SkipToday, shareTTL, logQueryShareTTL,
 		autoBool(request.AutoTasks, "main", "sync", request.AutoRun), autoTime(request.AutoTasks, "main", "sync", "00:20"),
 		autoBool(request.AutoTasks, "main", "import", request.AutoRun), autoTime(request.AutoTasks, "main", "import", "00:30"),
 		autoBool(request.AutoTasks, "sub", "sync", request.AutoRun), autoTime(request.AutoTasks, "sub", "sync", "00:40"),
@@ -164,14 +158,6 @@ func (s *Service) ShareTTLMinutes(ctx context.Context) int {
 		return 60
 	}
 	return NormalizeShareTTL(minutes)
-}
-
-func (s *Service) LogQuerySettings(ctx context.Context) LogQuerySettingsResponse {
-	var limit int
-	if err := s.db.QueryRowContext(ctx, `select log_query_hourly_limit from sync_config where id = 1`).Scan(&limit); err != nil {
-		limit = 5
-	}
-	return LogQuerySettingsResponse{OrdinaryMemberHourlyLimit: NormalizeLogQueryHourlyLimit(limit)}
 }
 
 func (s *Service) LogQueryShareTTLMinutes(ctx context.Context) int {
@@ -311,15 +297,14 @@ func (s *Service) readSyncConfig(ctx context.Context) (SyncConfigResponse, error
 	err := s.db.QueryRowContext(ctx, `
 		select coalesce(smb_host, ''), smb_port, coalesce(smb_domain, ''), coalesce(smb_username, ''),
 		       coalesce(smb_password, ''), coalesce(smb_share, ''), auto_run, coalesce(sync_cron, ''),
-		       skip_today, share_ttl_minutes, log_query_hourly_limit, log_query_share_ttl_minutes
+		       skip_today, share_ttl_minutes, log_query_share_ttl_minutes
 		from sync_config where id = 1
 	`).Scan(&cfg.SMBHost, &cfg.SMBPort, &cfg.SMBDomain, &cfg.SMBUsername, &cfg.SMBPassword, &cfg.SMBShare,
-		&cfg.AutoRun, &cfg.SyncCron, &cfg.SkipToday, &cfg.ShareTTLMinutes, &cfg.LogQueryHourlyLimit, &cfg.LogQueryShareTTLMinutes)
+		&cfg.AutoRun, &cfg.SyncCron, &cfg.SkipToday, &cfg.ShareTTLMinutes, &cfg.LogQueryShareTTLMinutes)
 	if err != nil {
 		return SyncConfigResponse{}, err
 	}
 	cfg.ShareTTLMinutes = NormalizeShareTTL(cfg.ShareTTLMinutes)
-	cfg.LogQueryHourlyLimit = NormalizeLogQueryHourlyLimit(cfg.LogQueryHourlyLimit)
 	cfg.LogQueryShareTTLMinutes = NormalizeShareTTL(cfg.LogQueryShareTTLMinutes)
 	return cfg, nil
 }
@@ -381,16 +366,6 @@ func NormalizeShareTTL(minutes int) int {
 		return 10080
 	}
 	return minutes
-}
-
-func NormalizeLogQueryHourlyLimit(limit int) int {
-	if limit <= 0 {
-		return 5
-	}
-	if limit > 60 {
-		return 60
-	}
-	return limit
 }
 
 func generateAPIKey() (string, error) {
