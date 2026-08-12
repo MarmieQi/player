@@ -185,6 +185,29 @@ const selectedShareServer = computed(() => {
   if (!shareServers.value.length) return null
   return shareServers.value.find((server) => server.serverId === selectedShareServerId.value) || shareServers.value[0]
 })
+const shareResourceIconAliases = Object.freeze({
+  lapis_ore: 'lapis_lazuli_ore',
+  deepslate_lapis_ore: 'deepslate_lapis_lazuli_ore',
+  quartz_ore: 'nether_quartz_ore'
+})
+const failedShareResourceIcons = ref(new Set())
+function shareResourceIconKey(type) {
+  const normalized = String(type || '').trim().toLowerCase().replace(/^minecraft:/, '')
+  if (!normalized || !/^[a-z0-9_]+$/.test(normalized)) return ''
+  return shareResourceIconAliases[normalized] || normalized
+}
+function shareResourceIconPath(type) {
+  const key = shareResourceIconKey(type)
+  if (!key || failedShareResourceIcons.value.has(key)) return ''
+  return `/minecraft-icons/${key}.png`
+}
+function markShareResourceIconFailed(type) {
+  const key = shareResourceIconKey(type)
+  if (!key || failedShareResourceIcons.value.has(key)) return
+  const next = new Set(failedShareResourceIcons.value)
+  next.add(key)
+  failedShareResourceIcons.value = next
+}
 const minecraftServers = Object.freeze({
   '主服': { name: 'cat', host: 'cat66.cn', port: 19132 },
   '2服': { name: 'cat生电服', host: 'cat66.cn', port: 19134 }
@@ -510,7 +533,9 @@ async function loadShareDetails() {
   shareLoading.value = true
   shareError.value = ''
   try {
-    const data = await apiGet(`/api/share/${encodeURIComponent(shareToken.value)}`, {}, { auth: false })
+    const data = import.meta.env.DEV && shareToken.value === 'preview'
+      ? (await import('./player-share-preview')).createPlayerSharePreviewData()
+      : await apiGet(`/api/share/${encodeURIComponent(shareToken.value)}`, {}, { auth: false })
     shareData.value = data
     selectedShareServerId.value = data.servers?.[0]?.serverId || ''
     startShareTicker()
@@ -2541,7 +2566,7 @@ function toggleAllImportFileSelection(checked) {
                 <div class="share-v2-milestone-body">
                   <span>{{ item.label }}</span>
                   <strong>{{ item.firstSeenAt ? formatShareMoment(item.firstSeenAt) : cleanShareText(item.missingText, '还没有记录') }}</strong>
-                  <small>{{ item.firstSeenAt ? cleanShareText(item.detail || item.foundText || '已记录', '已记录') : '等待新的日志记录' }}</small>
+                  <small v-if="item.firstSeenAt">{{ cleanShareText(item.detail || item.foundText || '已记录', '已记录') }}</small>
                 </div>
                 <em>{{ item.firstSeenAt ? '已完成' : '未完成' }}</em>
               </article>
@@ -2566,7 +2591,15 @@ function toggleAllImportFileSelection(checked) {
                 :key="ore.type"
                 class="share-v2-resource-item"
               >
-                <span class="share-v2-resource-icon"><Pickaxe :size="17" /></span>
+                <span class="share-v2-resource-icon" :class="{ 'is-image': shareResourceIconPath(ore.type) }">
+                  <img
+                    v-if="shareResourceIconPath(ore.type)"
+                    :src="shareResourceIconPath(ore.type)"
+                    :alt="`${ore.label}图标`"
+                    @error="markShareResourceIconFailed(ore.type)"
+                  />
+                  <Pickaxe v-else :size="17" />
+                </span>
                 <div class="share-v2-resource-body">
                   <div class="share-v2-resource-name"><span>{{ ore.label }}</span></div>
                   <div class="share-v2-resource-value">
@@ -2605,7 +2638,15 @@ function toggleAllImportFileSelection(checked) {
                   :key="wood.type"
                   class="share-v2-resource-item"
                 >
-                  <span class="share-v2-resource-icon"><TreePine :size="17" /></span>
+                  <span class="share-v2-resource-icon" :class="{ 'is-image': shareResourceIconPath(wood.type) }">
+                    <img
+                      v-if="shareResourceIconPath(wood.type)"
+                      :src="shareResourceIconPath(wood.type)"
+                      :alt="`${wood.label}图标`"
+                      @error="markShareResourceIconFailed(wood.type)"
+                    />
+                    <TreePine v-else :size="17" />
+                  </span>
                   <div class="share-v2-resource-body">
                     <div class="share-v2-resource-name"><span>{{ wood.label }}</span></div>
                     <div class="share-v2-resource-value">
@@ -2643,7 +2684,15 @@ function toggleAllImportFileSelection(checked) {
                   :key="sapling.type"
                   class="share-v2-resource-item"
                 >
-                  <span class="share-v2-resource-icon"><Sprout :size="17" /></span>
+                  <span class="share-v2-resource-icon" :class="{ 'is-image': shareResourceIconPath(sapling.type) }">
+                    <img
+                      v-if="shareResourceIconPath(sapling.type)"
+                      :src="shareResourceIconPath(sapling.type)"
+                      :alt="`${sapling.label}图标`"
+                      @error="markShareResourceIconFailed(sapling.type)"
+                    />
+                    <Sprout v-else :size="17" />
+                  </span>
                   <div class="share-v2-resource-body">
                     <div class="share-v2-resource-name"><span>{{ sapling.label }}</span></div>
                     <div class="share-v2-resource-value">

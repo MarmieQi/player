@@ -1,0 +1,289 @@
+[
+  {
+    "key": "coal_ore",
+    "file": "coal_ore.png",
+    "sourceFile": "Coal_Ore_JE5_BE4.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Coal_Ore_JE5_BE4.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "deepslate_coal_ore",
+    "file": "deepslate_coal_ore.png",
+    "sourceFile": "Deepslate_Coal_Ore_JE1_BE2.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Deepslate_Coal_Ore_JE1_BE2.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "iron_ore",
+    "file": "iron_ore.png",
+    "sourceFile": "Iron_Ore_JE6_BE4.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Iron_Ore_JE6_BE4.png",
+    "sourceType": "image/webp"
+  },
+  {
+    "key": "deepslate_iron_ore",
+    "file": "deepslate_iron_ore.png",
+    "sourceFile": "Deepslate_Iron_Ore_JE2_BE1.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Deepslate_Iron_Ore_JE2_BE1.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "lapis_lazuli_ore",
+    "file": "lapis_lazuli_ore.png",
+    "sourceFile": "Lapis_Lazuli_Ore_JE4_BE4.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Lapis_Lazuli_Ore_JE4_BE4.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "deepslate_lapis_lazuli_ore",
+    "file": "deepslate_lapis_lazuli_ore.png",
+    "sourceFile": "Deepslate_Lapis_Lazuli_Ore_JE3_BE2.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Deepslate_Lapis_Lazuli_Ore_JE3_BE2.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "copper_ore",
+    "file": "copper_ore.png",
+    "sourceFile": "Copper_Ore_JE2_BE2.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Copper_Ore_JE2_BE2.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "deepslate_copper_ore",
+    "file": "deepslate_copper_ore.png",
+    "sourceFile": "Deepslate_Copper_Ore_JE2_BE2.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Deepslate_Copper_Ore_JE2_BE2.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "gold_ore",
+    "file": "gold_ore.png",
+    "sourceFile": "Gold_Ore_JE7_BE4.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Gold_Ore_JE7_BE4.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "deepslate_gold_ore",
+    "file": "deepslate_gold_ore.png",
+    "sourceFile": "Deepslate_Gold_Ore_JE2_BE1.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Deepslate_Gold_Ore_JE2_BE1.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "redstone_ore",
+    "file": "redstone_ore.png",
+    "sourceFile": "Redstone_Ore_JE4_BE3.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Redstone_Ore_JE4_BE3.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "deepslate_redstone_ore",
+    "file": "deepslate_redstone_ore.png",
+    "sourceFile": "Deepslate_Redstone_Ore_JE2_BE1.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Deepslate_Redstone_Ore_JE2_BE1.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "diamond_ore",
+    "file": "diamond_ore.png",
+    "sourceFile": "Diamond_Ore_JE5_BE5.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Diamond_Ore_JE5_BE5.png",
+    "sourceType": "image/webp"
+  },
+  {
+    "key": "deepslate_diamond_ore",
+    "file": "deepslate_diamond_ore.png",
+    "sourceFile": "Deepslate_Diamond_Ore_JE2_BE1.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Deepslate_Diamond_Ore_JE2_BE1.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "emerald_ore",
+    "file": "emerald_ore.png",
+    "sourceFile": "Emerald_Ore_JE4_BE3.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Emerald_Ore_JE4_BE3.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "deepslate_emerald_ore",
+    "file": "deepslate_emerald_ore.png",
+    "sourceFile": "Deepslate_Emerald_Ore_JE1_BE1.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Deepslate_Emerald_Ore_JE1_BE1.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "nether_quartz_ore",
+    "file": "nether_quartz_ore.png",
+    "sourceFile": "Nether_Quartz_Ore_JE3_BE2.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Nether_Quartz_Ore_JE3_BE2.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "nether_gold_ore",
+    "file": "nether_gold_ore.png",
+    "sourceFile": "Nether_Gold_Ore_JE2_BE1.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Nether_Gold_Ore_JE2_BE1.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "ancient_debris",
+    "file": "ancient_debris.png",
+    "sourceFile": "Ancient_Debris_JE1_BE1.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Ancient_Debris_JE1_BE1.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "oak_log",
+    "file": "oak_log.png",
+    "sourceFile": "Oak_Log_Axis_Y_JE5_BE3.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Oak_Log_Axis_Y_JE5_BE3.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "spruce_log",
+    "file": "spruce_log.png",
+    "sourceFile": "Spruce_Log_Axis_Y_JE5_BE3.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Spruce_Log_Axis_Y_JE5_BE3.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "birch_log",
+    "file": "birch_log.png",
+    "sourceFile": "Birch_Log_Axis_Y_JE5_BE3.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Birch_Log_Axis_Y_JE5_BE3.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "jungle_log",
+    "file": "jungle_log.png",
+    "sourceFile": "Jungle_Log_Axis_Y_JE6_BE3.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Jungle_Log_Axis_Y_JE6_BE3.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "acacia_log",
+    "file": "acacia_log.png",
+    "sourceFile": "Acacia_Log_Axis_Y_JE5_BE3.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Acacia_Log_Axis_Y_JE5_BE3.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "dark_oak_log",
+    "file": "dark_oak_log.png",
+    "sourceFile": "Dark_Oak_Log_(UD)_JE6_BE4.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Dark_Oak_Log_(UD)_JE6_BE4.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "mangrove_log",
+    "file": "mangrove_log.png",
+    "sourceFile": "Mangrove_Log_(UD)_JE1_BE1.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Mangrove_Log_(UD)_JE1_BE1.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "cherry_log",
+    "file": "cherry_log.png",
+    "sourceFile": "Cherry_Log_(UD)_JE1_BE1.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Cherry_Log_(UD)_JE1_BE1.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "pale_oak_log",
+    "file": "pale_oak_log.png",
+    "sourceFile": "Pale_Oak_Log_(UD)_JE1_BE1.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Pale_Oak_Log_(UD)_JE1_BE1.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "crimson_stem",
+    "file": "crimson_stem.png",
+    "sourceFile": "Crimson_Stem_Axis_Y_JE2_BE1.gif",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Crimson_Stem_Axis_Y_JE2_BE1.gif",
+    "sourceType": "image/gif"
+  },
+  {
+    "key": "warped_stem",
+    "file": "warped_stem.png",
+    "sourceFile": "Warped_Stem_Axis_Y_JE2_BE1.gif",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Warped_Stem_Axis_Y_JE2_BE1.gif",
+    "sourceType": "image/gif"
+  },
+  {
+    "key": "oak_sapling",
+    "file": "oak_sapling.png",
+    "sourceFile": "Oak_Sapling_JE5_BE2.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Oak_Sapling_JE5_BE2.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "spruce_sapling",
+    "file": "spruce_sapling.png",
+    "sourceFile": "Spruce_Sapling_JE2_BE2.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Spruce_Sapling_JE2_BE2.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "birch_sapling",
+    "file": "birch_sapling.png",
+    "sourceFile": "Birch_Sapling_JE2_BE2.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Birch_Sapling_JE2_BE2.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "jungle_sapling",
+    "file": "jungle_sapling.png",
+    "sourceFile": "Jungle_Sapling_JE2_BE2.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Jungle_Sapling_JE2_BE2.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "acacia_sapling",
+    "file": "acacia_sapling.png",
+    "sourceFile": "Acacia_Sapling_JE2_BE2.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Acacia_Sapling_JE2_BE2.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "dark_oak_sapling",
+    "file": "dark_oak_sapling.png",
+    "sourceFile": "Dark_Oak_Sapling_JE2_BE2.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Dark_Oak_Sapling_JE2_BE2.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "cherry_sapling",
+    "file": "cherry_sapling.png",
+    "sourceFile": "Cherry_Sapling_JE2_BE1.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Cherry_Sapling_JE2_BE1.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "pale_oak_sapling",
+    "file": "pale_oak_sapling.png",
+    "sourceFile": "Pale_Oak_Sapling_JE1_BE1.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Pale_Oak_Sapling_JE1_BE1.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "mangrove_propagule",
+    "file": "mangrove_propagule.png",
+    "sourceFile": "Mangrove_Propagule_JE1.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Mangrove_Propagule_JE1.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "crimson_fungus",
+    "file": "crimson_fungus.png",
+    "sourceFile": "Crimson_Fungus_JE1_BE2.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Crimson_Fungus_JE1_BE2.png",
+    "sourceType": "image/png"
+  },
+  {
+    "key": "warped_fungus",
+    "file": "warped_fungus.png",
+    "sourceFile": "Warped_Fungus_JE1_BE2.png",
+    "sourceUrl": "https://zh.minecraft.wiki/w/File:Warped_Fungus_JE1_BE2.png",
+    "sourceType": "image/png"
+  }
+]
