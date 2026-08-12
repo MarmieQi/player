@@ -933,6 +933,7 @@ func (s *Service) serverDetails(ctx context.Context, server stats.PlayerServerSt
 	if err != nil {
 		return ServerDetailsResponse{}, err
 	}
+	milestones = withFirstJoinMilestone(milestones, server.FirstSeenAt)
 	ores, err := s.oreItems(ctx, server.ServerID, playerName)
 	if err != nil {
 		return ServerDetailsResponse{}, err
@@ -959,6 +960,19 @@ func (s *Service) serverDetails(ctx context.Context, server stats.PlayerServerSt
 		Woods:         woods,
 		Saplings:      saplings,
 	}, nil
+}
+
+func withFirstJoinMilestone(items []MilestoneItem, firstSeenAt *apitype.LocalDateTime) []MilestoneItem {
+	result := make([]MilestoneItem, 0, len(items)+1)
+	result = append(result, MilestoneItem{
+		Type:        "FIRST_JOIN",
+		Label:       "第一次来到这里",
+		FoundText:   "旅程的起点",
+		MissingText: "还没有首次记录",
+		FirstSeenAt: firstSeenAt,
+		Detail:      "旅程的起点",
+	})
+	return append(result, items...)
 }
 
 func (s *Service) milestoneItems(ctx context.Context, serverID, playerName string) ([]MilestoneItem, error) {
