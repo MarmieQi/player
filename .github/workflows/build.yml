@@ -11,8 +11,8 @@ permissions:
   packages: write
 
 env:
-  BACKEND_IMAGE: ghcr.io/jmcat999/player-backend
-  FRONTEND_IMAGE: ghcr.io/jmcat999/player-frontend
+  BACKEND_IMAGE: ghcr.io/marmieqi/player-backend
+  FRONTEND_IMAGE: ghcr.io/marmieqi/player-frontend
 
 jobs:
   go-backend:

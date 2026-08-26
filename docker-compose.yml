@@ -39,7 +39,7 @@ services:
       start_period: 30s
 
   backend:
-    image: ghcr.io/jmcat999/player-backend:latest
+    image: ghcr.io/marmieqi/player-backend:latest
     container_name: player-stats-backend
     restart: always
     depends_on:
@@ -105,7 +105,7 @@ services:
       - "8080"
 
   frontend:
-    image: ghcr.io/jmcat999/player-frontend:latest
+    image: ghcr.io/marmieqi/player-frontend:latest
     container_name: player-stats-frontend
     restart: always
     depends_on:
