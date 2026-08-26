@@ -57,6 +57,80 @@ func TestLogQueryCoordinateFilterUsesInteractionCoordinates(t *testing.T) {
 	}
 }
 
+func TestLogQueryCoordinateFilterSupportsLegacyBucketCoordinates(t *testing.T) {
+	criteria := logQueryCriteria{
+		queryType: queryTypeCoordinate,
+		x1:        10,
+		y1:        20,
+		z1:        30,
+		x2:        10,
+		y2:        20,
+		z2:        30,
+		dimension: "主世界",
+	}
+
+	for _, action := range []string{"使用桶放置", "使用桶交互"} {
+		row := []string{
+			"2026-08-25", "12:00:00", "Alex", action,
+			"10", "20", "30", "主世界",
+			"-", "-", "-", "-",
+			"minecraft:stone", "minecraft:water_bucket",
+		}
+		if !criteria.matches(row) {
+			t.Fatalf("legacy %q row did not fall back to position 1", action)
+		}
+	}
+}
+
+func TestLogQueryCoordinateFilterPrefersBucketInteractionCoordinates(t *testing.T) {
+	criteria := logQueryCriteria{
+		queryType: queryTypeCoordinate,
+		x1:        10,
+		y1:        20,
+		z1:        30,
+		x2:        10,
+		y2:        20,
+		z2:        30,
+		dimension: "主世界",
+	}
+	row := []string{
+		"2026-08-25", "12:00:00", "Alex", "使用桶交互",
+		"999", "999", "999", "主世界",
+		"10", "20", "30", "主世界",
+		"minecraft:stone", "minecraft:water_bucket",
+	}
+	if !criteria.matches(row) {
+		t.Fatal("new bucket row did not use interaction coordinates from position 2")
+	}
+
+	row[8], row[9], row[10] = "998", "998", "998"
+	if criteria.matches(row) {
+		t.Fatal("bucket row fell back to position 1 even though position 2 was present")
+	}
+}
+
+func TestLogQueryCoordinateFilterDoesNotFallbackForOtherActions(t *testing.T) {
+	criteria := logQueryCriteria{
+		queryType: queryTypeCoordinate,
+		x1:        10,
+		y1:        20,
+		z1:        30,
+		x2:        10,
+		y2:        20,
+		z2:        30,
+		dimension: "主世界",
+	}
+	row := []string{
+		"2026-08-25", "12:00:00", "Alex", "执行命令",
+		"10", "20", "30", "主世界",
+		"-", "-", "-", "-",
+		"say hello", "-",
+	}
+	if criteria.matches(row) {
+		t.Fatal("non-bucket row unexpectedly fell back to position 1")
+	}
+}
+
 func TestLogQueryCoordinateFilterRejectsNonFiniteCoordinates(t *testing.T) {
 	validRow := []string{
 		"2026-04-01", "12:00:00", "Alex", "破坏方块",
@@ -122,11 +196,13 @@ func TestPublicCoordinateRadiusUsesThreeDimensionalDistance(t *testing.T) {
 	}
 }
 
-func TestPublicCoordinateScanOnlyIncludesBrokenAndPlacedBlocks(t *testing.T) {
+func TestPublicCoordinateScanIncludesBlocksAndBucketInteractions(t *testing.T) {
 	path := t.TempDir() + "/player_actions_2026-04-01.csv"
 	contents := "2026-04-01,12:00:00,Alex,破坏方块,0,0,0,overworld,10,20,30,overworld,minecraft:stone,\n" +
 		"2026-04-01,12:01:00,Alex,打开容器,0,0,0,overworld,10,20,30,overworld,minecraft:chest,\n" +
-		"2026-04-01,12:02:00,Alex,放置方块,0,0,0,overworld,10,20,30,overworld,minecraft:dirt,\n"
+		"2026-04-01,12:02:00,Alex,放置方块,0,0,0,overworld,10,20,30,overworld,minecraft:dirt,\n" +
+		"2026-04-01,12:03:00,Alex,使用桶放置,10,20,30,overworld,-,-,-,-,minecraft:stone,minecraft:water_bucket\n" +
+		"2026-04-01,12:04:00,Alex,使用桶交互,10,20,30,overworld,-,-,-,-,minecraft:water,minecraft:bucket\n"
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -136,13 +212,16 @@ func TestPublicCoordinateScanOnlyIncludesBrokenAndPlacedBlocks(t *testing.T) {
 	if err := scanPublicCoordinateFile(RemoteLogFile{Path: path, FileName: "player_actions_2026-04-01.csv"}, criteria, &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.MatchedRows != 2 || len(result.Rows) != 2 {
-		t.Fatalf("matched rows = %d, rows = %d; want only break/place rows", result.MatchedRows, len(result.Rows))
+	if result.MatchedRows != 4 || len(result.Rows) != 4 {
+		t.Fatalf("matched rows = %d, rows = %d; want break/place and both bucket actions", result.MatchedRows, len(result.Rows))
 	}
-	for _, row := range result.Rows {
-		if parseAction(row.Action) == "" {
-			t.Fatalf("unexpected shared action %q", row.Action)
+	for _, action := range []string{"破坏方块", "放置方块", "使用桶放置", "使用桶交互"} {
+		if !isPublicCoordinateAction(action) {
+			t.Fatalf("expected public coordinate action %q to be allowed", action)
 		}
+	}
+	if isPublicCoordinateAction("打开容器") {
+		t.Fatal("unexpectedly allowed non-public coordinate action")
 	}
 }
 

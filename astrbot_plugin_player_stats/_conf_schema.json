@@ -76,6 +76,12 @@
     "default": 5,
     "hint": "每个绑定游戏 ID 在 1 小时内最多使用 /查日志 的次数，范围 1-60；QQ群主和群管理员不受限制。"
   },
+  "enable_ai_log_query": {
+    "description": "启用 AI 自然语言查日志",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后，支持函数调用的模型可根据自然语言调用坐标日志查询。普通玩家仍需绑定游戏 ID，并遵守查日志次数限制；/查日志 命令不受此开关影响。"
+  },
   "log_query_recent_days": {
     "description": "查日志最近天数",
     "type": "int",

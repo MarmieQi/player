@@ -25,19 +25,21 @@ type Config struct {
 	AdminJWTSecret    string
 	AdminJWTIssuer    string
 
-	LogArchiveDirectory string
-	MainName            string
-	SubName             string
-	MainDirectory       string
-	SubDirectory        string
-	MainFileGlob        string
-	SubFileGlob         string
-	MainEnabled         bool
-	SubEnabled          bool
-	SkipToday           bool
-	MaxFilesPerRun      int
-	XrayRetainedJobs    int
-	XrayTempDirectory   string
+	LogArchiveDirectory       string
+	MainName                  string
+	SubName                   string
+	MainDirectory             string
+	SubDirectory              string
+	MainFileGlob              string
+	SubFileGlob               string
+	MainEnabled               bool
+	SubEnabled                bool
+	SkipToday                 bool
+	MaxFilesPerRun            int
+	XrayRetainedJobs          int
+	XrayTempDirectory         string
+	LiveLogSnapshotDirectory  string
+	LiveLogSnapshotTTLSeconds int
 
 	SMBHost      string
 	SMBPort      int
@@ -74,19 +76,21 @@ func Load() Config {
 		AdminJWTSecret:    env("APP_ADMIN_JWT_SECRET", "change-me-player-stats-jwt-secret-change-me"),
 		AdminJWTIssuer:    env("APP_ADMIN_JWT_ISSUER", "player-stats"),
 
-		LogArchiveDirectory: env("PLAYER_LOGS_ARCHIVE_DIRECTORY", "./synced-logs"),
-		MainName:            env("PLAYER_LOGS_MAIN_NAME", "主服"),
-		SubName:             env("PLAYER_LOGS_SUB_NAME", "2服"),
-		MainDirectory:       env("PLAYER_LOGS_MAIN_DIRECTORY", "./synced-logs/main"),
-		SubDirectory:        env("PLAYER_LOGS_SUB_DIRECTORY", "./synced-logs/sub"),
-		MainFileGlob:        env("PLAYER_LOGS_MAIN_FILE_GLOB", "player_actions_*.csv"),
-		SubFileGlob:         env("PLAYER_LOGS_SUB_FILE_GLOB", "player_actions_*.csv"),
-		MainEnabled:         boolEnv("PLAYER_LOGS_MAIN_ENABLED", true),
-		SubEnabled:          boolEnv("PLAYER_LOGS_SUB_ENABLED", true),
-		SkipToday:           boolEnv("PLAYER_LOGS_IMPORTER_SKIP_TODAY", true),
-		MaxFilesPerRun:      intEnv("PLAYER_LOGS_IMPORTER_MAX_FILES_PER_RUN", 1000),
-		XrayRetainedJobs:    intEnv("PLAYER_LOGS_XRAY_ANALYSIS_RETAINED_JOBS", 1),
-		XrayTempDirectory:   env("PLAYER_LOGS_XRAY_TEMP_DIRECTORY", filepath.Join(os.TempDir(), "player-stats-xray")),
+		LogArchiveDirectory:       env("PLAYER_LOGS_ARCHIVE_DIRECTORY", "./synced-logs"),
+		MainName:                  env("PLAYER_LOGS_MAIN_NAME", "主服"),
+		SubName:                   env("PLAYER_LOGS_SUB_NAME", "2服"),
+		MainDirectory:             env("PLAYER_LOGS_MAIN_DIRECTORY", "./synced-logs/main"),
+		SubDirectory:              env("PLAYER_LOGS_SUB_DIRECTORY", "./synced-logs/sub"),
+		MainFileGlob:              env("PLAYER_LOGS_MAIN_FILE_GLOB", "player_actions_*.csv"),
+		SubFileGlob:               env("PLAYER_LOGS_SUB_FILE_GLOB", "player_actions_*.csv"),
+		MainEnabled:               boolEnv("PLAYER_LOGS_MAIN_ENABLED", true),
+		SubEnabled:                boolEnv("PLAYER_LOGS_SUB_ENABLED", true),
+		SkipToday:                 boolEnv("PLAYER_LOGS_IMPORTER_SKIP_TODAY", true),
+		MaxFilesPerRun:            intEnv("PLAYER_LOGS_IMPORTER_MAX_FILES_PER_RUN", 1000),
+		XrayRetainedJobs:          intEnv("PLAYER_LOGS_XRAY_ANALYSIS_RETAINED_JOBS", 1),
+		XrayTempDirectory:         env("PLAYER_LOGS_XRAY_TEMP_DIRECTORY", filepath.Join(os.TempDir(), "player-stats-xray")),
+		LiveLogSnapshotDirectory:  env("PLAYER_LOGS_LIVE_TEMP_DIRECTORY", filepath.Join(os.TempDir(), "player-stats-live-log-query")),
+		LiveLogSnapshotTTLSeconds: intEnv("PLAYER_LOGS_LIVE_CACHE_SECONDS", 120),
 
 		SMBHost:      env("PLAYER_LOGS_SMB_HOST", ""),
 		SMBPort:      intEnv("PLAYER_LOGS_SMB_PORT", 445),

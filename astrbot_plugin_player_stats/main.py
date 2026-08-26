@@ -17,7 +17,7 @@ from astrbot.core.star.filter.command import GreedyStr
     "player_stats",
     "Codex",
     "查询 Minecraft 玩家在主服和 2服的方块统计",
-    "0.13.0",
+    "0.14.0",
 )
 
 class PlayerStatsPlugin(Star):
@@ -126,6 +126,48 @@ class PlayerStatsPlugin(Star):
     async def query_coordinate_logs(self, event: AstrMessageEvent, args: GreedyStr):
         """按指定服务器的交互坐标查询公开日志。例如 /查日志 主服 -191 -34 750。"""
         async for result in self._handle_coordinate_log_query(event, str(args)):
+            yield result
+
+    @filter.llm_tool(name="query_minecraft_logs")
+    async def ai_query_coordinate_logs(
+        self,
+        event: AstrMessageEvent,
+        server: str,
+        x: float,
+        y: float,
+        z: float,
+        radius: float = 0,
+    ):
+        """查询 Minecraft 服务器指定坐标附近的公开交互日志。
+
+        仅当用户明确要求查询某个坐标附近的方块、容器、桶或其他交互记录，
+        并且已经提供服务器名称和完整 XYZ 坐标时调用。缺少信息时先询问用户，
+        不要猜测服务器或坐标。工具会自动检查绑定状态，不要提前询问用户是否绑定；
+        未绑定时工具会返回绑定提示。
+
+        Args:
+            server(string): 服务器名称，例如主服、1服、2服或副服
+            x(number): X 坐标
+            y(number): Y 坐标
+            z(number): Z 坐标
+            radius(number): 查询半径，省略时为 0，范围 0 到 100
+        """
+        if not self._config_bool("enable_ai_log_query", False):
+            yield event.plain_result(
+                "AI 自然语言查日志功能当前未启用，请使用 /查日志 命令。"
+            )
+            return
+
+        raw_args = " ".join(
+            (
+                str(server),
+                str(x),
+                str(y),
+                str(z),
+                str(radius),
+            )
+        )
+        async for result in self._handle_coordinate_log_query(event, raw_args):
             yield result
 
     async def _handle_coordinate_log_query(self, event: AstrMessageEvent, raw_args: str):

@@ -22,10 +22,11 @@ import (
 )
 
 type Service struct {
-	db       *sql.DB
-	cfg      config.Config
-	settings *settings.Service
-	parser   parser
+	db            *sql.DB
+	cfg           config.Config
+	settings      *settings.Service
+	parser        parser
+	liveSnapshots *liveLogSnapshotCache
 }
 
 type ProgressListener interface {
@@ -34,7 +35,13 @@ type ProgressListener interface {
 }
 
 func NewService(db *sql.DB, cfg config.Config, settingsService *settings.Service) *Service {
-	return &Service{db: db, cfg: cfg, settings: settingsService, parser: newParser(cfg.Location)}
+	return &Service{
+		db:            db,
+		cfg:           cfg,
+		settings:      settingsService,
+		parser:        newParser(cfg.Location),
+		liveSnapshots: newLiveLogSnapshotCache(cfg.LiveLogSnapshotDirectory, cfg.LiveLogSnapshotTTLSeconds),
+	}
 }
 
 func (s *Service) ListLocalImportFiles(ctx context.Context, requestedServerID string) ([]ImportFileStatus, error) {

@@ -92,7 +92,7 @@ Docker 会把宿主机目录挂载到容器：
 ./docker-data/synced-logs/main  -> 主服 CSV
 ./docker-data/synced-logs/sub   -> 2服 CSV
 ./docker-data/mysql             -> MySQL 数据
-./docker-data/temp              -> 矿透分析临时文件（任务完成后自动清理）
+./docker-data/temp              -> 矿透分析及当天日志查询临时文件（自动清理）
 ```
 
 CSV 文件名保持插件格式，例如：
@@ -118,9 +118,12 @@ PLAYER_LOGS_SMB_SHARE: "mcshare"
 PLAYER_LOGS_SMB_DIRECTORY: "logs"
 PLAYER_LOGS_SMB_FILE_GLOB: "player_actions_*.csv"
 PLAYER_LOGS_SMB_RECURSIVE: false
+PLAYER_LOGS_LIVE_TEMP_DIRECTORY: "/data/temp/live-log-query"
+PLAYER_LOGS_LIVE_CACHE_SECONDS: 120
 ```
 
 SMB 复制会先把远程 CSV 拉到本地归档目录，再从本地文件解析入库。
+当天文件仍会跳过正式同步；管理员和公开日志查询会使用专用目录中的短期只读快照，查询完成且缓存过期后自动清理。
 
 ## 本地开发
 

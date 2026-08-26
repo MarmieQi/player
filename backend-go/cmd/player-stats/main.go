@@ -55,6 +55,7 @@ func main() {
 	shareService := share.NewService(db, cfg, settingsService, statsService, xrayService, logQueryService)
 	cleanupCtx, cleanupCancel := context.WithCancel(context.Background())
 	go runShareTokenCleanup(cleanupCtx, shareService, logger)
+	go importService.RunLiveLogSnapshotCleanup(cleanupCtx)
 	defer cleanupCancel()
 	autoScheduler := importer.NewAutoTaskScheduler(settingsService, importService, logger, cfg.Location)
 	autoScheduler.Start()
@@ -84,6 +85,7 @@ func main() {
 	if err := server.Shutdown(ctx); err != nil {
 		logger.Error("graceful shutdown failed", "error", err)
 	}
+	importService.CloseLiveLogSnapshots()
 }
 
 func runShareTokenCleanup(ctx context.Context, service *share.Service, logger *slog.Logger) {

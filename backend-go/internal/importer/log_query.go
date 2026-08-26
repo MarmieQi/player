@@ -222,6 +222,11 @@ func (s *LogQueryService) PublicCoordinate(ctx context.Context, request PublicCo
 	if err != nil {
 		return PublicCoordinateLogQueryView{}, err
 	}
+	liveSnapshot, liveSnapshotErr := s.importer.acquireTodayLogSnapshot(ctx, source)
+	if liveSnapshot != nil {
+		defer liveSnapshot.Release()
+		files = mergeTodayLogSnapshotFiles(files, liveSnapshot.Files, s.importer.cfg.Location)
+	}
 	criteria := logQueryCriteria{
 		queryType: queryTypeCoordinate,
 		x1:        request.X,
@@ -245,6 +250,9 @@ func (s *LogQueryService) PublicCoordinate(ctx context.Context, request PublicCo
 		FromDate:   apiLogDate(fromDate),
 		ToDate:     apiLogDate(toDate),
 		Rows:       []LogQueryRow{},
+	}
+	if liveSnapshotErr != nil {
+		result.FailedFiles++
 	}
 	for _, file := range files {
 		fileDate := extractLogDate(file.FileName, s.importer.cfg.Location)
@@ -309,12 +317,24 @@ func scanPublicCoordinateFile(file RemoteLogFile, criteria logQueryCriteria, res
 			continue
 		}
 		result.ScannedRows++
-		if criteria.matches(columns) && parseAction(valueAt(columns, 3)) != "" {
+		if criteria.matches(columns) && isPublicCoordinateAction(valueAt(columns, 3)) {
 			result.MatchedRows++
 			result.Rows = append(result.Rows, logQueryRow(file, lineNumber, columns))
 		}
 	}
 	return scanner.Err()
+}
+
+func isPublicCoordinateAction(raw string) bool {
+	if parseAction(raw) != "" {
+		return true
+	}
+	switch strings.TrimSpace(raw) {
+	case "使用桶放置", "使用桶交互":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *LogQueryService) run(state *logQueryState, source configlessSource, key string) {
@@ -328,6 +348,17 @@ func (s *LogQueryService) run(state *logQueryState, source configlessSource, key
 	if err != nil {
 		state.markFailed(err.Error())
 		return
+	}
+	if state.criteria.includesDate(dateOnly(time.Now().In(s.importer.cfg.Location), s.importer.cfg.Location)) {
+		ctx, cancel := context.WithTimeout(context.Background(), liveLogSnapshotReadTimeout)
+		liveSnapshot, snapshotErr := s.importer.acquireTodayLogSnapshot(ctx, source.toConfigSource())
+		cancel()
+		if snapshotErr != nil {
+			state.markFileFailed(RemoteLogFile{FileName: "当天 SMB 日志"}, snapshotErr.Error())
+		} else {
+			defer liveSnapshot.Release()
+			files = mergeTodayLogSnapshotFiles(files, liveSnapshot.Files, s.importer.cfg.Location)
+		}
 	}
 	for _, file := range files {
 		if !state.criteria.shouldScanFile(file.FileName, s.importer.cfg.Location) {
@@ -461,6 +492,13 @@ func (c logQueryCriteria) shouldScanFile(fileName string, location *time.Locatio
 	return c.toDate == nil || !fileDate.After(*c.toDate)
 }
 
+func (c logQueryCriteria) includesDate(target time.Time) bool {
+	if c.fromDate != nil && target.Before(*c.fromDate) {
+		return false
+	}
+	return c.toDate == nil || !target.After(*c.toDate)
+}
+
 func (c logQueryCriteria) matches(columns []string) bool {
 	if c.queryType == queryTypePlayerKeyword {
 		if c.action != "" && !containsFold(valueAt(columns, 3), c.action) {
@@ -474,7 +512,23 @@ func (c logQueryCriteria) matches(columns []string) bool {
 		}
 		return true
 	}
-	return c.pointInBox(valueAt(columns, 8), valueAt(columns, 9), valueAt(columns, 10), valueAt(columns, 11))
+	x, y, z, dimension := interactionCoordinates(columns)
+	return c.pointInBox(x, y, z, dimension)
+}
+
+func interactionCoordinates(columns []string) (x, y, z, dimension string) {
+	x, y, z, dimension = valueAt(columns, 8), valueAt(columns, 9), valueAt(columns, 10), valueAt(columns, 11)
+	if !blankCoordinate(x) || !blankCoordinate(y) || !blankCoordinate(z) {
+		return x, y, z, dimension
+	}
+
+	// Legacy JS and native PlayerLogger releases stored bucket interaction coordinates in position 1.
+	switch strings.TrimSpace(valueAt(columns, 3)) {
+	case "使用桶放置", "使用桶交互":
+		return valueAt(columns, 4), valueAt(columns, 5), valueAt(columns, 6), valueAt(columns, 7)
+	default:
+		return x, y, z, dimension
+	}
 }
 
 func (c logQueryCriteria) pointInBox(rawX, rawY, rawZ, rawDimension string) bool {
