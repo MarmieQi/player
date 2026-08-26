@@ -17,7 +17,7 @@ from astrbot.core.star.filter.command import GreedyStr
     "player_stats",
     "Codex",
     "查询 Minecraft 玩家在主服和 2服的方块统计",
-    "0.14.0",
+    "0.14.1",
 )
 
 class PlayerStatsPlugin(Star):
@@ -136,21 +136,23 @@ class PlayerStatsPlugin(Star):
         x: float,
         y: float,
         z: float,
-        radius: float = 0,
+        radius: float = 5,
     ):
         """查询 Minecraft 服务器指定坐标附近的公开交互日志。
 
-        仅当用户明确要求查询某个坐标附近的方块、容器、桶或其他交互记录，
-        并且已经提供服务器名称和完整 XYZ 坐标时调用。缺少信息时先询问用户，
-        不要猜测服务器或坐标。工具会自动检查绑定状态，不要提前询问用户是否绑定；
-        未绑定时工具会返回绑定提示。
+        本项目只有主服和 2服。仅当用户明确要求查询其中一个服务器上某个坐标
+        附近的方块、容器、桶或其他交互记录，并且已经提供完整 XYZ 坐标时调用。
+        未说明服务器、服务器含糊，或要求同时查询两个服务器时，先让用户在主服和 2服中
+        明确选择一个；不要猜测，也不要为两个服务器分别调用工具。工具会自动检查绑定状态，
+        不要提前询问用户是否绑定；未绑定时工具会返回绑定提示。用户未指定半径时使用默认的
+        5 格，不要追问；用户要求精确坐标时使用 0 格。
 
         Args:
             server(string): 服务器名称，例如主服、1服、2服或副服
             x(number): X 坐标
             y(number): Y 坐标
             z(number): Z 坐标
-            radius(number): 查询半径，省略时为 0，范围 0 到 100
+            radius(number): 查询半径，省略时为 5，范围 0 到 100
         """
         if not self._config_bool("enable_ai_log_query", False):
             yield event.plain_result(
