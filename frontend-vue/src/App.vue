@@ -1363,7 +1363,7 @@ function logQueryRowDetailFields(row = selectedLogQueryRow.value) {
     ['行号', row.lineNumber],
     ['时间', [row.date, row.time].filter(Boolean).join(' ')],
     ['玩家', row.playerName],
-    ['行为', row.action],
+    ['行为', logQueryActionDisplay(row.action)],
     ['玩家坐标', logQueryCoordinateText(row.x, row.y, row.z, row.dimension)],
     ['交互坐标', logQueryInteractionCoordinateText(row)],
     ['文件路径', row.filePath]
@@ -1991,6 +1991,12 @@ function isBucketLogAction(action) {
   return ['使用桶放置', '使用桶交互'].includes(String(action || '').trim())
 }
 
+function logQueryActionDisplay(action) {
+  const value = String(action || '').trim()
+  if (isBucketLogAction(value)) return '使用桶交互'
+  return value || '-'
+}
+
 function logQueryInteractionCoordinateText(row) {
   const explicit = [row?.x2, row?.y2, row?.z2]
     .some((value) => {
@@ -2020,7 +2026,7 @@ function evidenceRowText(row) {
   const targetPosition = logQueryInteractionCoordinateText(row)
   return [
     when,
-    row?.action && row.action !== '-' ? row.action : '',
+    row?.action && row.action !== '-' ? logQueryActionDisplay(row.action) : '',
     logQuerySummaryDetailText(row),
     playerPosition !== '-' ? `玩家 ${playerPosition}` : '',
     targetPosition !== '-' ? `交互 ${targetPosition}` : ''
@@ -3129,7 +3135,7 @@ function toggleAllImportFileSelection(checked) {
               <tr v-for="row in logSharePagedRows" :key="`${row.fileName}:${row.lineNumber}`">
                 <td>{{ row.date }} {{ row.time }}</td>
                 <td><strong>{{ row.playerName || '-' }}</strong></td>
-                <td><span class="log-share-action" :class="logShareActionClass(row.action)">{{ row.action || '-' }}</span></td>
+                <td><span class="log-share-action" :class="logShareActionClass(row.action)">{{ logQueryActionDisplay(row.action) }}</span></td>
                 <td>{{ logQueryInteractionCoordinateText(row) }}</td>
                 <td class="message-cell">{{ logQuerySummaryDetailText(row) }}</td>
               </tr>
@@ -3140,7 +3146,7 @@ function toggleAllImportFileSelection(checked) {
         <div v-if="logSharePagedRows.length" class="log-share-cards">
           <article v-for="row in logSharePagedRows" :key="`${row.fileName}:${row.lineNumber}:card`" :class="logShareActionClass(row.action)">
             <div><strong>{{ row.playerName || '-' }}</strong><span>{{ row.date }} {{ row.time }}</span></div>
-            <p>{{ row.action || '-' }} · {{ logQuerySummaryDetailText(row) }}</p>
+            <p>{{ logQueryActionDisplay(row.action) }} · {{ logQuerySummaryDetailText(row) }}</p>
             <small><Crosshair :size="14" />{{ logQueryInteractionCoordinateText(row) }}</small>
           </article>
         </div>
@@ -4329,7 +4335,7 @@ function toggleAllImportFileSelection(checked) {
                 <td>{{ row.lineNumber }}</td>
                 <td>{{ row.date }} {{ row.time }}</td>
                 <td>{{ row.playerName }}</td>
-                <td>{{ row.action }}</td>
+                <td>{{ logQueryActionDisplay(row.action) }}</td>
                 <td>{{ logQueryCoordinateText(row.x, row.y, row.z, row.dimension) }}</td>
                 <td>{{ logQueryInteractionCoordinateText(row) }}</td>
                 <td class="message-cell" :title="row.detail1 || ''">{{ logQueryDetailDisplay(row, 'detail1') }}</td>
@@ -4353,7 +4359,7 @@ function toggleAllImportFileSelection(checked) {
           >
             <span class="log-query-card-head">
               <strong>{{ row.date }} {{ row.time }}</strong>
-              <span>{{ row.action || '-' }}</span>
+              <span>{{ logQueryActionDisplay(row.action) }}</span>
             </span>
             <span class="log-query-card-player">{{ row.playerName || '-' }}</span>
             <span class="log-query-card-coord">交互：{{ logQueryInteractionCoordinateText(row) }}</span>
