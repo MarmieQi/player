@@ -215,6 +215,13 @@ func TestPublicCoordinateScanIncludesBlocksAndBucketInteractions(t *testing.T) {
 	if result.MatchedRows != 4 || len(result.Rows) != 4 {
 		t.Fatalf("matched rows = %d, rows = %d; want break/place and both bucket actions", result.MatchedRows, len(result.Rows))
 	}
+	bucketPlace := result.Rows[2]
+	if bucketPlace.X2 != "10" || bucketPlace.Y2 != "20" || bucketPlace.Z2 != "30" {
+		t.Fatalf("public bucket coordinates = %q, %q, %q", bucketPlace.X2, bucketPlace.Y2, bucketPlace.Z2)
+	}
+	if bucketPlace.Detail2 != "minecraft:water_bucket" || bucketPlace.Detail2Display != "水桶" {
+		t.Fatalf("public bucket detail = %q, display = %q", bucketPlace.Detail2, bucketPlace.Detail2Display)
+	}
 	for _, action := range []string{"破坏方块", "放置方块", "使用桶放置", "使用桶交互"} {
 		if !isPublicCoordinateAction(action) {
 			t.Fatalf("expected public coordinate action %q to be allowed", action)

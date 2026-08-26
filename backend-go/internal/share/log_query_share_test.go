@@ -61,7 +61,7 @@ func TestLogQueryShareDetailsJSONIsFlat(t *testing.T) {
 
 func TestLogQuerySnapshotCompressionRoundTrip(t *testing.T) {
 	want := []importer.LogQueryRow{
-		{FileName: "player_actions_2026-08-08.csv", LineNumber: 10, PlayerName: "Steve", Action: "破坏方块", X2: "1", Y2: "2", Z2: "3"},
+		{FileName: "player_actions_2026-08-08.csv", LineNumber: 10, PlayerName: "Steve", Action: "破坏方块", X2: "1", Y2: "2", Z2: "3", Detail1: "minecraft:cobblestone", Detail1Display: "圆石"},
 		{FileName: "player_actions_2026-08-08.csv", LineNumber: 11, PlayerName: "Alex", Action: "放置方块", X2: "4", Y2: "5", Z2: "6"},
 	}
 	payload, err := compressLogQueryRows(want)
@@ -75,7 +75,7 @@ func TestLogQuerySnapshotCompressionRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != len(want) || got[0].PlayerName != want[0].PlayerName || got[1].Action != want[1].Action {
+	if len(got) != len(want) || got[0].PlayerName != want[0].PlayerName || got[0].Detail1Display != want[0].Detail1Display || got[1].Action != want[1].Action {
 		t.Fatalf("round trip rows = %#v, want %#v", got, want)
 	}
 }

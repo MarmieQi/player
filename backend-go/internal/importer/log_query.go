@@ -13,6 +13,7 @@ import (
 
 	"player-stats-backend-go/internal/apitype"
 	"player-stats-backend-go/internal/auth"
+	"player-stats-backend-go/internal/catalog/bedrock"
 	"player-stats-backend-go/internal/config"
 )
 
@@ -46,23 +47,25 @@ type LogQueryRequest struct {
 }
 
 type LogQueryRow struct {
-	FileName   string `json:"fileName"`
-	FilePath   string `json:"filePath"`
-	LineNumber int64  `json:"lineNumber"`
-	Date       string `json:"date"`
-	Time       string `json:"time"`
-	PlayerName string `json:"playerName"`
-	Action     string `json:"action"`
-	X          string `json:"x"`
-	Y          string `json:"y"`
-	Z          string `json:"z"`
-	Dimension  string `json:"dimension"`
-	X2         string `json:"x2"`
-	Y2         string `json:"y2"`
-	Z2         string `json:"z2"`
-	Dimension2 string `json:"dimension2"`
-	Detail1    string `json:"detail1"`
-	Detail2    string `json:"detail2"`
+	FileName       string `json:"fileName"`
+	FilePath       string `json:"filePath"`
+	LineNumber     int64  `json:"lineNumber"`
+	Date           string `json:"date"`
+	Time           string `json:"time"`
+	PlayerName     string `json:"playerName"`
+	Action         string `json:"action"`
+	X              string `json:"x"`
+	Y              string `json:"y"`
+	Z              string `json:"z"`
+	Dimension      string `json:"dimension"`
+	X2             string `json:"x2"`
+	Y2             string `json:"y2"`
+	Z2             string `json:"z2"`
+	Dimension2     string `json:"dimension2"`
+	Detail1        string `json:"detail1"`
+	Detail1Display string `json:"detail1Display,omitempty"`
+	Detail2        string `json:"detail2"`
+	Detail2Display string `json:"detail2Display,omitempty"`
 }
 
 type LogQueryView struct {
@@ -329,12 +332,7 @@ func isPublicCoordinateAction(raw string) bool {
 	if parseAction(raw) != "" {
 		return true
 	}
-	switch strings.TrimSpace(raw) {
-	case "使用桶放置", "使用桶交互":
-		return true
-	default:
-		return false
-	}
+	return isBucketAction(raw)
 }
 
 func (s *LogQueryService) run(state *logQueryState, source configlessSource, key string) {
@@ -523,12 +521,10 @@ func interactionCoordinates(columns []string) (x, y, z, dimension string) {
 	}
 
 	// Legacy JS and native PlayerLogger releases stored bucket interaction coordinates in position 1.
-	switch strings.TrimSpace(valueAt(columns, 3)) {
-	case "使用桶放置", "使用桶交互":
+	if isBucketAction(valueAt(columns, 3)) {
 		return valueAt(columns, 4), valueAt(columns, 5), valueAt(columns, 6), valueAt(columns, 7)
-	default:
-		return x, y, z, dimension
 	}
+	return x, y, z, dimension
 }
 
 func (c logQueryCriteria) pointInBox(rawX, rawY, rawZ, rawDimension string) bool {
@@ -738,7 +734,7 @@ func idleLogQueryView(serverID, serverName string, pageSize int) LogQueryView {
 }
 
 func logQueryRow(file RemoteLogFile, lineNumber int64, values []string) LogQueryRow {
-	return LogQueryRow{
+	row := LogQueryRow{
 		FileName:   file.FileName,
 		FilePath:   file.Path,
 		LineNumber: lineNumber,
@@ -756,6 +752,43 @@ func logQueryRow(file RemoteLogFile, lineNumber int64, values []string) LogQuery
 		Dimension2: valueAt(values, 11),
 		Detail1:    valueAt(values, 12),
 		Detail2:    valueAt(values, 13),
+	}
+	populateBucketInteractionCoordinates(&row)
+	populateLogQueryRowDisplayNames(&row)
+	return row
+}
+
+func populateBucketInteractionCoordinates(row *LogQueryRow) {
+	if row == nil || !isBucketAction(row.Action) {
+		return
+	}
+	if !blankCoordinate(row.X2) || !blankCoordinate(row.Y2) || !blankCoordinate(row.Z2) {
+		return
+	}
+	row.X2 = row.X
+	row.Y2 = row.Y
+	row.Z2 = row.Z
+	row.Dimension2 = row.Dimension
+}
+
+func isBucketAction(action string) bool {
+	switch strings.TrimSpace(action) {
+	case "使用桶放置", "使用桶交互":
+		return true
+	default:
+		return false
+	}
+}
+
+func populateLogQueryRowDisplayNames(row *LogQueryRow) {
+	if row == nil {
+		return
+	}
+	if name, ok := bedrock.Lookup(row.Detail1); ok {
+		row.Detail1Display = name
+	}
+	if name, ok := bedrock.Lookup(row.Detail2); ok {
+		row.Detail2Display = name
 	}
 }
 

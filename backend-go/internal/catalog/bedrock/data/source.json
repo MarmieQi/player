@@ -1,0 +1,17 @@
+{
+  "catalogVersion": 1,
+  "minecraftVersion": "1.26.40.05",
+  "sourceTag": "v1.26.40.05",
+  "sourceCommit": "7844835b6baad4c0010f46901a4accf87413a022",
+  "sourceRepository": "https://github.com/Mojang/bedrock-samples.git",
+  "sourceFiles": [
+    "metadata/vanilladata_modules/mojang-blocks.json",
+    "metadata/vanilladata_modules/mojang-items.json",
+    "resource_pack/texts/en_US.lang",
+    "resource_pack/texts/zh_CN.lang"
+  ],
+  "blockIdentifiers": 1415,
+  "itemIdentifiers": 1607,
+  "uniqueIdentifiers": 1937,
+  "mappedIdentifiers": 1937
+}

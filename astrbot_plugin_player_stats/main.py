@@ -272,7 +272,6 @@ class PlayerStatsPlugin(Star):
             lines.extend(["", str(result.get("message") or "没有匹配日志")])
         else:
             lines.extend(["", "查询成功，但未能生成详情链接，请联系管理员检查分享地址配置。"])
-        lines.extend(["", "提示：最新日志通常在每天凌晨 0-1 点刷新，查询结果以服务器已同步的本地日志为准。"])
         yield event.plain_result("\n".join(lines))
 
     async def _query_and_format_all(self, game_id: str) -> tuple[str, bool]:

@@ -1343,6 +1343,19 @@ function logQueryRowFieldText(value) {
   return text || '-'
 }
 
+function logQueryDetailDisplay(row, field) {
+  const display = String(row?.[`${field}Display`] ?? '').trim()
+  const raw = String(row?.[field] ?? '').trim()
+  return display || raw || '-'
+}
+
+function logQueryDetailAuditText(row, field) {
+  const display = String(row?.[`${field}Display`] ?? '').trim()
+  const raw = String(row?.[field] ?? '').trim()
+  if (display && raw && display !== raw) return `${display}（${raw}）`
+  return display || raw || '-'
+}
+
 function logQueryRowDetailFields(row = selectedLogQueryRow.value) {
   if (!row) return []
   return [
@@ -1352,7 +1365,7 @@ function logQueryRowDetailFields(row = selectedLogQueryRow.value) {
     ['玩家', row.playerName],
     ['行为', row.action],
     ['玩家坐标', logQueryCoordinateText(row.x, row.y, row.z, row.dimension)],
-    ['交互坐标', logQueryCoordinateText(row.x2, row.y2, row.z2, row.dimension2)],
+    ['交互坐标', logQueryInteractionCoordinateText(row)],
     ['文件路径', row.filePath]
   ].map(([label, value]) => ({ label, value: logQueryRowFieldText(value) }))
 }
@@ -1360,8 +1373,8 @@ function logQueryRowDetailFields(row = selectedLogQueryRow.value) {
 function logQueryRowDetailText(row = selectedLogQueryRow.value) {
   if (!row) return ''
   const lines = logQueryRowDetailFields(row).map((field) => `${field.label}：${field.value}`)
-  lines.push(`详细1：${logQueryRowFieldText(row.detail1)}`)
-  lines.push(`详细2：${logQueryRowFieldText(row.detail2)}`)
+  lines.push(`详细1：${logQueryDetailAuditText(row, 'detail1')}`)
+  lines.push(`详细2：${logQueryDetailAuditText(row, 'detail2')}`)
   return lines.join('\n')
 }
 
@@ -1974,8 +1987,25 @@ function formatCoordValue(value) {
   return Number.isInteger(number) ? String(number) : number.toLocaleString(undefined, { maximumFractionDigits: 3 })
 }
 
-function rareOreDetailText(row) {
-  const detail = [row?.detail1, row?.detail2]
+function isBucketLogAction(action) {
+  return ['使用桶放置', '使用桶交互'].includes(String(action || '').trim())
+}
+
+function logQueryInteractionCoordinateText(row) {
+  const explicit = [row?.x2, row?.y2, row?.z2]
+    .some((value) => {
+      const text = String(value ?? '').trim()
+      return text && text !== '-'
+    })
+  if (!explicit && isBucketLogAction(row?.action)) {
+    return logQueryCoordinateText(row?.x, row?.y, row?.z, row?.dimension)
+  }
+  return logQueryCoordinateText(row?.x2, row?.y2, row?.z2, row?.dimension2)
+}
+
+function logQuerySummaryDetailText(row) {
+  const fields = isBucketLogAction(row?.action) ? ['detail2', 'detail1'] : ['detail1', 'detail2']
+  const detail = fields.map((field) => logQueryDetailDisplay(row, field))
     .find((value) => value && value !== '-')
   return detail || '-'
 }
@@ -1987,11 +2017,11 @@ function logShareActionClass(action) {
 function evidenceRowText(row) {
   const when = [row?.date, row?.time].filter(Boolean).join(' ')
   const playerPosition = logQueryCoordinateText(row?.x, row?.y, row?.z, row?.dimension)
-  const targetPosition = logQueryCoordinateText(row?.x2, row?.y2, row?.z2, row?.dimension2)
+  const targetPosition = logQueryInteractionCoordinateText(row)
   return [
     when,
     row?.action && row.action !== '-' ? row.action : '',
-    rareOreDetailText(row),
+    logQuerySummaryDetailText(row),
     playerPosition !== '-' ? `玩家 ${playerPosition}` : '',
     targetPosition !== '-' ? `交互 ${targetPosition}` : ''
   ].filter(Boolean).join(' · ') || '-'
@@ -3006,9 +3036,9 @@ function toggleAllImportFileSelection(checked) {
                   <tr v-for="(row, index) in xraySharePagedRareOreRows" :key="`${row.filePath}:${row.lineNumber}:share-rare`">
                     <td>{{ xrayShareOrePositionOffset + index + 1 }}</td>
                     <td>{{ row.date }} {{ row.time }}</td>
-                    <td class="message-cell">{{ rareOreDetailText(row) }}</td>
+                    <td class="message-cell">{{ logQuerySummaryDetailText(row) }}</td>
                     <td>{{ logQueryCoordinateText(row.x, row.y, row.z, row.dimension) }}</td>
-                    <td>{{ logQueryCoordinateText(row.x2, row.y2, row.z2, row.dimension2) }}</td>
+                    <td>{{ logQueryInteractionCoordinateText(row) }}</td>
                   </tr>
                 </tbody>
               </table>
@@ -3100,8 +3130,8 @@ function toggleAllImportFileSelection(checked) {
                 <td>{{ row.date }} {{ row.time }}</td>
                 <td><strong>{{ row.playerName || '-' }}</strong></td>
                 <td><span class="log-share-action" :class="logShareActionClass(row.action)">{{ row.action || '-' }}</span></td>
-                <td>{{ logQueryCoordinateText(row.x2, row.y2, row.z2, row.dimension2) }}</td>
-                <td class="message-cell">{{ rareOreDetailText(row) }}</td>
+                <td>{{ logQueryInteractionCoordinateText(row) }}</td>
+                <td class="message-cell">{{ logQuerySummaryDetailText(row) }}</td>
               </tr>
             </tbody>
           </table>
@@ -3110,8 +3140,8 @@ function toggleAllImportFileSelection(checked) {
         <div v-if="logSharePagedRows.length" class="log-share-cards">
           <article v-for="row in logSharePagedRows" :key="`${row.fileName}:${row.lineNumber}:card`" :class="logShareActionClass(row.action)">
             <div><strong>{{ row.playerName || '-' }}</strong><span>{{ row.date }} {{ row.time }}</span></div>
-            <p>{{ row.action || '-' }} · {{ rareOreDetailText(row) }}</p>
-            <small><Crosshair :size="14" />{{ logQueryCoordinateText(row.x2, row.y2, row.z2, row.dimension2) }}</small>
+            <p>{{ row.action || '-' }} · {{ logQuerySummaryDetailText(row) }}</p>
+            <small><Crosshair :size="14" />{{ logQueryInteractionCoordinateText(row) }}</small>
           </article>
         </div>
 
@@ -4301,9 +4331,9 @@ function toggleAllImportFileSelection(checked) {
                 <td>{{ row.playerName }}</td>
                 <td>{{ row.action }}</td>
                 <td>{{ logQueryCoordinateText(row.x, row.y, row.z, row.dimension) }}</td>
-                <td>{{ logQueryCoordinateText(row.x2, row.y2, row.z2, row.dimension2) }}</td>
-                <td class="message-cell">{{ row.detail1 || '-' }}</td>
-                <td class="message-cell">{{ row.detail2 || '-' }}</td>
+                <td>{{ logQueryInteractionCoordinateText(row) }}</td>
+                <td class="message-cell" :title="row.detail1 || ''">{{ logQueryDetailDisplay(row, 'detail1') }}</td>
+                <td class="message-cell" :title="row.detail2 || ''">{{ logQueryDetailDisplay(row, 'detail2') }}</td>
               </tr>
               <tr v-if="!selectedLogQueryRows.length">
                 <td colspan="9" class="empty">
@@ -4326,8 +4356,8 @@ function toggleAllImportFileSelection(checked) {
               <span>{{ row.action || '-' }}</span>
             </span>
             <span class="log-query-card-player">{{ row.playerName || '-' }}</span>
-            <span class="log-query-card-coord">交互：{{ logQueryCoordinateText(row.x2, row.y2, row.z2, row.dimension2) }}</span>
-            <span class="log-query-card-detail">{{ row.detail1 || row.detail2 || '-' }}</span>
+            <span class="log-query-card-coord">交互：{{ logQueryInteractionCoordinateText(row) }}</span>
+            <span class="log-query-card-detail">{{ logQuerySummaryDetailText(row) }}</span>
           </button>
           <p v-if="!selectedLogQueryRows.length" class="empty log-query-card-empty">
             {{ selectedLogQueryRunning ? '正在查询，请稍等' : (selectedLogQueryResult?.message || '还没有查询记录') }}
@@ -4392,11 +4422,11 @@ function toggleAllImportFileSelection(checked) {
 
           <section class="log-detail-block">
             <h3>详细1</h3>
-            <pre>{{ logQueryRowFieldText(selectedLogQueryRow.detail1) }}</pre>
+            <pre>{{ logQueryDetailAuditText(selectedLogQueryRow, 'detail1') }}</pre>
           </section>
           <section class="log-detail-block">
             <h3>详细2</h3>
-            <pre>{{ logQueryRowFieldText(selectedLogQueryRow.detail2) }}</pre>
+            <pre>{{ logQueryDetailAuditText(selectedLogQueryRow, 'detail2') }}</pre>
           </section>
 
           <div class="modal-actions">
@@ -4650,9 +4680,9 @@ function toggleAllImportFileSelection(checked) {
                     <tr v-for="(row, index) in xrayDetailPagedRareOreRows" :key="`${row.filePath}:${row.lineNumber}:rare`">
                       <td>{{ xrayDetailOrePositionOffset + index + 1 }}</td>
                       <td>{{ row.date }} {{ row.time }}</td>
-                      <td class="message-cell">{{ rareOreDetailText(row) }}</td>
+                      <td class="message-cell">{{ logQuerySummaryDetailText(row) }}</td>
                       <td>{{ logQueryCoordinateText(row.x, row.y, row.z, row.dimension) }}</td>
-                      <td>{{ logQueryCoordinateText(row.x2, row.y2, row.z2, row.dimension2) }}</td>
+                      <td>{{ logQueryInteractionCoordinateText(row) }}</td>
                     </tr>
                   </tbody>
                 </table>
