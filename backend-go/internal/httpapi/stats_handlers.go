@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"player-stats-backend-go/internal/apitype"
 	"player-stats-backend-go/internal/importer"
 	"player-stats-backend-go/internal/stats"
 )
@@ -73,14 +74,36 @@ func (s *Server) statsPlayer(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) statsPlayerPresence(w http.ResponseWriter, r *http.Request) {
+	serverID := r.URL.Query().Get("serverId")
+	playerName := r.URL.Query().Get("playerName")
 	response, found, err := s.statsService.PlayerPresence(
 		r.Context(),
-		r.URL.Query().Get("serverId"),
-		r.URL.Query().Get("playerName"),
+		serverID,
+		playerName,
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "服务器内部错误")
 		return
+	}
+	if !found && s.importService != nil {
+		liveMatches, liveErr := s.importService.FindPlayerInTodayLogs(r.Context(), serverID, playerName)
+		if liveErr != nil {
+			s.logger.Warn("live player presence lookup failed", "server_id", serverID, "player_name", playerName, "error", liveErr)
+			writeError(w, http.StatusServiceUnavailable, "当天日志暂时不可用，无法确认玩家是否存在")
+			return
+		}
+		if len(liveMatches) > 0 {
+			response = stats.PlayerPresenceResponse{PlayerName: liveMatches[0].PlayerName, Servers: make([]stats.PlayerPresenceServer, 0, len(liveMatches))}
+			for _, match := range liveMatches {
+				item := stats.PlayerPresenceServer{ServerID: match.ServerID, ServerName: match.ServerName, PlayerName: match.PlayerName}
+				if !match.FirstSeen.IsZero() {
+					firstSeen := apitype.NewLocalDateTime(match.FirstSeen)
+					item.FirstSeenAt = &firstSeen
+				}
+				response.Servers = append(response.Servers, item)
+			}
+			found = true
+		}
 	}
 	if !found {
 		writeError(w, http.StatusNotFound, "没有这个玩家信息")
