@@ -170,6 +170,8 @@ npm run build
 
 插件开发与维护参考 [AstrBot 官方插件开发指南](https://docs.astrbot.app/dev/star/plugin-new.html)。
 
+后端玩家 ID 查询的完整接口约定见 [玩家 ID 存在性查询 API](backend-go/player-presence-api.md)。
+
 插件目录：
 
 ```text

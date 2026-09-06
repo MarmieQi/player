@@ -36,6 +36,10 @@ GET /api/health
 GET /api/stats/server-time
 ```
 
+## API 文档
+
+- [玩家 ID 存在性查询 API](player-presence-api.md)：包含插件密钥鉴权、查询参数、当天日志兜底、共享缓存及错误状态语义。
+
 ## Docker
 
 项目根目录执行：
