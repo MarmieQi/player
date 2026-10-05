@@ -27,7 +27,7 @@
     "description": "矿透分析发送群号",
     "type": "string",
     "default": "",
-    "hint": "填写要接收矿透风险提示的群号。插件会优先通过机器人平台接口直发；高级用法也可以填写完整会话来源标识。"
+    "hint": "填写要接收矿透风险提示的群 ID。aiocqhttp 平台填 QQ 群号；qq_official 官方机器人填群 OpenID（AstrBot 日志里群会话名 default_ 后面的部分）。插件会优先通过 OneBot 接口直发，失败后自动改用平台消息接口；也可以直接填写完整会话来源标识。"
   },
   "enable_xray_group_ws": {
     "description": "启用矿透分析长连接群发送",
@@ -70,11 +70,29 @@
     "default": 24,
     "hint": "玩家成功使用一次 /我的游戏信息 或 /查日志 后，重新绑定游戏 ID 的冷却时间。范围 0-8760，0 表示关闭冷却。"
   },
+  "enable_log_query": {
+    "description": "启用查日志功能",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭后 /查日志 命令和 AI 自然语言查日志都会提示功能已关闭。"
+  },
+  "enable_log_query_whitelist": {
+    "description": "启用查日志白名单",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后，只有白名单内的用户可以使用 /查日志 和 AI 查日志；其他人使用时机器人不返回任何消息。白名单为空时所有人都无法使用，群主和群管理员也需要加入白名单。白名单用户不受每小时查询次数限制。"
+  },
+  "log_query_whitelist": {
+    "description": "查日志白名单",
+    "type": "list",
+    "default": [],
+    "hint": "填写允许使用查日志的用户 ID，每行一个。aiocqhttp 等平台填 QQ 号；qq_official 官方机器人不显示 QQ 号，需填用户的 OpenID（发送 /查日志 被忽略后，AstrBot 日志会显示应添加的 sender id）。"
+  },
   "log_query_hourly_limit": {
     "description": "普通成员查日志次数（每小时）",
     "type": "int",
     "default": 5,
-    "hint": "每个绑定游戏 ID 在 1 小时内最多使用 /查日志 的次数，范围 1-60；QQ群主和群管理员不受限制。"
+    "hint": "每个绑定游戏 ID 在 1 小时内最多使用 /查日志 的次数，范围 1-60；QQ群主、群管理员和白名单用户不受限制。"
   },
   "enable_ai_log_query": {
     "description": "启用 AI 自然语言查日志",

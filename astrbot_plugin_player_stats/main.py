@@ -17,7 +17,7 @@ from astrbot.core.star.filter.command import GreedyStr
     "player_stats",
     "Codex",
     "查询 Minecraft 玩家在主服和 2服的方块统计",
-    "0.14.1",
+    "0.17.0",
 )
 
 class PlayerStatsPlugin(Star):
@@ -125,6 +125,12 @@ class PlayerStatsPlugin(Star):
     @filter.command("查日志", alias={"坐标日志", "查坐标日志"})
     async def query_coordinate_logs(self, event: AstrMessageEvent, args: GreedyStr):
         """按指定服务器的交互坐标查询公开日志。例如 /查日志 主服 -191 -34 750。"""
+        if not self._is_log_query_whitelisted(event):
+            logger.info(
+                f"public coordinate log query ignored: sender {event.get_sender_id()} not in whitelist; "
+                "add this sender id to log_query_whitelist if it should be allowed"
+            )
+            return
         async for result in self._handle_coordinate_log_query(event, str(args)):
             yield result
 
@@ -154,6 +160,13 @@ class PlayerStatsPlugin(Star):
             z(number): Z 坐标
             radius(number): 查询半径，省略时为 5，范围 0 到 100
         """
+        if not self._is_log_query_whitelisted(event):
+            yield event.plain_result(
+                "当前用户不在查日志白名单内。请直接告知无法完成该查询，"
+                "不要提及白名单、权限或查日志功能。"
+            )
+            return
+
         if not self._config_bool("enable_ai_log_query", False):
             yield event.plain_result(
                 "AI 自然语言查日志功能当前未启用，请使用 /查日志 命令。"
@@ -173,6 +186,9 @@ class PlayerStatsPlugin(Star):
             yield result
 
     async def _handle_coordinate_log_query(self, event: AstrMessageEvent, raw_args: str):
+        if not self._config_bool("enable_log_query", True):
+            yield event.plain_result("查日志功能已关闭。")
+            return
         parsed = self._parse_coordinate_log_args(raw_args)
         if parsed is None:
             yield event.plain_result(self._log_query_usage_text())
@@ -182,7 +198,13 @@ class PlayerStatsPlugin(Star):
         days = self._public_log_recent_days()
         coord_text = self._format_coord_triplet(x, y, z)
         is_group_admin = await self._can_use_admin_log_query(event)
-        mode = "group_admin" if is_group_admin else "bound_player"
+        whitelist_member = self._is_log_query_whitelist_member(event)
+        if is_group_admin:
+            mode = "group_admin"
+        elif whitelist_member:
+            mode = "whitelist_player"
+        else:
+            mode = "bound_player"
 
         quota: dict[str, Any] | None = None
         if is_group_admin:
@@ -218,15 +240,16 @@ class PlayerStatsPlugin(Star):
             return
 
         if not is_group_admin:
-            quota = self._consume_log_query_quota(presence["player_name"])
-            if not quota["ok"]:
-                self._forget_duplicate_log_query(dedupe_key)
-                yield event.plain_result(
-                    f"查询次数已用完：每个玩家 1 小时内最多查询 {quota['limit']} 次。\n"
-                    f"请约 {quota['reset_minutes']} 分钟后再试。"
-                )
-                return
             query_actor = presence["player_name"]
+            if not whitelist_member:
+                quota = self._consume_log_query_quota(presence["player_name"])
+                if not quota["ok"]:
+                    self._forget_duplicate_log_query(dedupe_key)
+                    yield event.plain_result(
+                        f"查询次数已用完：每个玩家 1 小时内最多查询 {quota['limit']} 次。\n"
+                        f"请约 {quota['reset_minutes']} 分钟后再试。"
+                    )
+                    return
 
         yield event.plain_result(
             f"正在查询 {target_server['serverName']} 已同步的最近 {days} 天日志中，请稍等...\n"
@@ -754,7 +777,55 @@ class PlayerStatsPlugin(Star):
             await self.context.send_message(target, MessageChain().message(text))
             return
 
-        await self._send_onebot_group_text(target, text)
+        try:
+            await self._send_onebot_group_text(target, text)
+            return
+        except Exception as onebot_error:
+            platform_error = await self._send_platform_group_text(target, text)
+            if not platform_error:
+                return
+            raise RuntimeError(
+                f"send_group_msg failed for group {target}: {onebot_error}; "
+                f"platform send also failed: {platform_error}"
+            ) from onebot_error
+
+    async def _send_platform_group_text(self, group_id: str, text: str) -> str:
+        # OneBot-only sending misses platforms like qq_official, where the
+        # group id is an openid and no OneBot client exists. Fall back to a
+        # GroupMessage UMO routed through every connected platform adapter.
+        chain = MessageChain().message(text)
+        errors: list[str] = []
+        for platform_name in self._platform_names():
+            unified_msg_origin = f"{platform_name}:GroupMessage:{group_id}"
+            try:
+                if await self.context.send_message(unified_msg_origin, chain):
+                    return ""
+                errors.append(f"{platform_name}: no matching platform")
+            except Exception as ex:
+                errors.append(f"{platform_name}: {ex}")
+        return "; ".join(errors) or "no connected platform found"
+
+    def _platform_names(self) -> list[str]:
+        platform_manager = getattr(self.context, "platform_manager", None)
+        get_insts = getattr(platform_manager, "get_insts", None)
+        if not callable(get_insts):
+            return []
+        try:
+            raw_platforms = get_insts() or []
+        except Exception as ex:
+            logger.warning(f"discover AstrBot platforms failed: {ex}")
+            return []
+
+        names: list[str] = []
+        if isinstance(raw_platforms, dict):
+            names.extend(str(name) for name in raw_platforms.keys())
+        else:
+            for platform in raw_platforms:
+                meta = getattr(platform, "meta", None)
+                platform_id = getattr(meta(), "id", "") if callable(meta) else ""
+                if platform_id:
+                    names.append(str(platform_id))
+        return list(dict.fromkeys(name for name in names if name))
 
     async def _send_onebot_group_text(self, group_id: str, text: str):
         errors: list[str] = []
@@ -1189,6 +1260,22 @@ class PlayerStatsPlugin(Star):
             "半径范围：/查日志 主服 -191 -34 750 5\n"
             "说明：最后一个数字是半径，可省略，范围 0-100 格。"
         )
+
+    def _is_log_query_whitelisted(self, event: AstrMessageEvent) -> bool:
+        if not self._config_bool("enable_log_query_whitelist", False):
+            return True
+        sender_id = str(event.get_sender_id() or "").strip().lower()
+        if not sender_id:
+            return False
+        return sender_id in self._log_query_whitelist_ids()
+
+    def _is_log_query_whitelist_member(self, event: AstrMessageEvent) -> bool:
+        # Only members admitted by an enabled whitelist get quota exemption;
+        # when the whitelist is off, _is_log_query_whitelisted passes everyone.
+        return self._config_bool("enable_log_query_whitelist", False) and self._is_log_query_whitelisted(event)
+
+    def _log_query_whitelist_ids(self) -> set[str]:
+        return self._split_alias_config(self.config.get("log_query_whitelist", []))
 
     def _consume_log_query_quota(self, game_id: str) -> dict[str, Any]:
         limit = self._public_log_hourly_limit()

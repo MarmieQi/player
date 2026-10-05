@@ -29,6 +29,34 @@ QQ群主和群管理员无需绑定游戏 ID，且不限制查询次数。普通
 普通成员每小时查询次数由 AstrBot 插件配置 `log_query_hourly_limit` 调整，默认 5 次；日志详情链接有效期在网页后台调整。查询只扫描已同步本地日志中最近 `log_query_recent_days` 天的日志，默认 7 天；
 查询成功后群消息直接返回服务器日志详情链接；后端查询超时由 `log_query_timeout_seconds` 配置，默认 60 秒。
 
+如果不想开放查日志功能，可以在 AstrBot 插件配置里关闭：
+
+```text
+enable_log_query = false
+```
+
+关闭后 `/查日志` 命令和 AI 自然语言查日志都会提示"查日志功能已关闭"，不影响其他命令。
+
+## 查日志白名单
+
+查日志支持白名单模式。在 AstrBot 插件配置里开启：
+
+```text
+enable_log_query_whitelist = true
+```
+
+然后在 `log_query_whitelist` 里填写允许使用查日志的用户 ID（QQ 号），每行一个。开启后：
+
+- 只有白名单内的用户可以使用 `/查日志` 和 AI 自然语言查日志。
+- 其他用户发送 `/查日志` 时，机器人不返回任何消息；被忽略的请求会记录在 AstrBot 日志里，并附上被忽略用户的 sender id，方便加入白名单。
+- 白名单用户不受每小时查询次数限制，但和普通成员一样需要绑定游戏 ID，15 秒内重复的相同查询仍会被拦截。
+- 白名单模式下群主和群管理员没有豁免，也需要加入白名单；白名单为空时所有人都无法使用查日志。
+- 白名单只限制查日志，不影响绑定、统计和榜单命令。
+
+注意各平台的用户 ID 不一定相同：aiocqhttp（OneBot）平台就是 QQ 号；qq_official（QQ 官方机器人）不提供真实 QQ 号，
+用户 ID 是一串 OpenID。如果某人使用 `/查日志` 没有反应，先看 AstrBot 日志里 "not in whitelist" 提示中的 sender id，
+把这个 ID 加入 `log_query_whitelist` 即可。
+
 插件配置 `enable_ai_log_query` 开启后，支持 Function Calling 的模型也可以根据自然语言调用坐标日志查询。每次只能查询主服或 2服中明确的一个；用户未说明、表达含糊或要求同时查两个服务器时，AI 会请用户先选择服务器，不会猜测或分别调用两次。用户未指定半径时，AI 默认查询 5 格半径并在查询消息中告知玩家；明确要求精确坐标时使用 0 格。AI 查询与 `/查日志` 共用绑定、服务器验证、管理员豁免、次数限制和重复请求拦截规则；普通玩家没有绑定游戏 ID 时，机器人会提示先使用 `/绑定游戏id 游戏id`。该开关默认关闭，且不影响 `/查日志` 命令。
 查询结果会显示按可查询日志文件推导出的具体日期范围。
 匹配到日志时结果会直接附带临时详情链接；页面通过后端分页展示全部匹配日志，过期快照由后端定时清理。
@@ -112,8 +140,13 @@ enable_xray_group_send = true
 xray_group_id = 123456789
 ```
 
-`xray_group_id` 直接填写 QQ 群号即可。插件会优先通过 OneBot/aiocqhttp 的 `send_group_msg`
-接口发送；如果你已经知道完整 `unified_msg_origin`，也可以直接填完整 UMO 作为高级兜底。
+`xray_group_id` 填写目标群 ID。aiocqhttp（OneBot）平台填 QQ 群号；qq_official（QQ 官方机器人）平台填群 OpenID，
+即 AstrBot 日志里群会话 `default_xxx(qq_official)` 中 `default_` 后面的部分。插件会优先通过 OneBot/aiocqhttp 的
+`send_group_msg` 接口发送；找不到 OneBot 客户端时，会自动改为按各平台的 `GroupMessage` 会话接口发送。
+如果你已经知道完整 `unified_msg_origin`（例如 `qq_official:GroupMessage:群OpenID`），也可以直接填完整 UMO。
+
+注意：QQ 官方机器人对主动群发有限制。机器人启动后目标群里需要有人发过消息，AstrBot 才会缓存该群的发送场景；
+否则这条风险提示可能被平台静默跳过而不报错。遇到"任务显示已发送但群里没收到"时，先在群里随便发一条消息再重试。
 
 绑定示例：
 
