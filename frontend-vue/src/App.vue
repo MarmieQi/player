@@ -36,6 +36,7 @@ import {
   UserRound
 } from 'lucide-vue-next'
 import { apiDelete, apiGet, apiPost, apiPostJson, apiPutJson, clearAuthToken, getAuthToken, setAuthToken } from './api'
+import { isBucketLogAction, logQueryActionDisplay, logQueryDetailDisplay, logQuerySummaryDetailText, logShareActionClass } from './log-presentation'
 
 const loading = ref(false)
 const authChecked = ref(false)
@@ -1343,12 +1344,6 @@ function logQueryRowFieldText(value) {
   return text || '-'
 }
 
-function logQueryDetailDisplay(row, field) {
-  const display = String(row?.[`${field}Display`] ?? '').trim()
-  const raw = String(row?.[field] ?? '').trim()
-  return display || raw || '-'
-}
-
 function logQueryDetailAuditText(row, field) {
   const display = String(row?.[`${field}Display`] ?? '').trim()
   const raw = String(row?.[field] ?? '').trim()
@@ -1987,16 +1982,6 @@ function formatCoordValue(value) {
   return Number.isInteger(number) ? String(number) : number.toLocaleString(undefined, { maximumFractionDigits: 3 })
 }
 
-function isBucketLogAction(action) {
-  return ['使用桶放置', '使用桶交互'].includes(String(action || '').trim())
-}
-
-function logQueryActionDisplay(action) {
-  const value = String(action || '').trim()
-  if (isBucketLogAction(value)) return '使用桶交互'
-  return value || '-'
-}
-
 function logQueryInteractionCoordinateText(row) {
   const explicit = [row?.x2, row?.y2, row?.z2]
     .some((value) => {
@@ -2007,17 +1992,6 @@ function logQueryInteractionCoordinateText(row) {
     return logQueryCoordinateText(row?.x, row?.y, row?.z, row?.dimension)
   }
   return logQueryCoordinateText(row?.x2, row?.y2, row?.z2, row?.dimension2)
-}
-
-function logQuerySummaryDetailText(row) {
-  const fields = isBucketLogAction(row?.action) ? ['detail2', 'detail1'] : ['detail1', 'detail2']
-  const detail = fields.map((field) => logQueryDetailDisplay(row, field))
-    .find((value) => value && value !== '-')
-  return detail || '-'
-}
-
-function logShareActionClass(action) {
-  return String(action || '').includes('放置') ? 'is-placed' : 'is-broken'
 }
 
 function evidenceRowText(row) {

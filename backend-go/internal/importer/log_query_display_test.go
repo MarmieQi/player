@@ -33,13 +33,15 @@ func TestLogQueryRowExposesLegacyBucketClickCoordinatesAndBucketName(t *testing.
 }
 
 func TestLogQueryRowKeepsExplicitBucketInteractionCoordinates(t *testing.T) {
-	values := []string{
-		"2026-08-25", "12:00:00", "Alex", "使用桶交互",
-		"999", "999", "999", "主世界", "10", "20", "30", "主世界",
-		"minecraft:stone", "minecraft:water_bucket",
-	}
-	row := logQueryRow(RemoteLogFile{}, 1, values)
-	if row.X2 != "10" || row.Y2 != "20" || row.Z2 != "30" {
-		t.Fatalf("explicit interaction coordinates were overwritten: %#v", row)
+	for _, action := range []string{"使用桶放置", "使用桶收取", "使用桶交互"} {
+		values := []string{
+			"2026-08-25", "12:00:00", "Alex", action,
+			"999", "999", "999", "主世界", "10", "20", "30", "主世界",
+			"minecraft:stone", "minecraft:water_bucket",
+		}
+		row := logQueryRow(RemoteLogFile{}, 1, values)
+		if row.X2 != "10" || row.Y2 != "20" || row.Z2 != "30" {
+			t.Fatalf("explicit interaction coordinates were overwritten: %#v", row)
+		}
 	}
 }

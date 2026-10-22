@@ -69,7 +69,7 @@ func TestLogQueryCoordinateFilterSupportsLegacyBucketCoordinates(t *testing.T) {
 		dimension: "主世界",
 	}
 
-	for _, action := range []string{"使用桶放置", "使用桶交互"} {
+	for _, action := range []string{"使用桶放置", "使用桶收取", "使用桶交互"} {
 		row := []string{
 			"2026-08-25", "12:00:00", "Alex", action,
 			"10", "20", "30", "主世界",
@@ -202,7 +202,11 @@ func TestPublicCoordinateScanIncludesBlocksAndBucketInteractions(t *testing.T) {
 		"2026-04-01,12:01:00,Alex,打开容器,0,0,0,overworld,10,20,30,overworld,minecraft:chest,\n" +
 		"2026-04-01,12:02:00,Alex,放置方块,0,0,0,overworld,10,20,30,overworld,minecraft:dirt,\n" +
 		"2026-04-01,12:03:00,Alex,使用桶放置,10,20,30,overworld,-,-,-,-,minecraft:stone,minecraft:water_bucket\n" +
-		"2026-04-01,12:04:00,Alex,使用桶交互,10,20,30,overworld,-,-,-,-,minecraft:water,minecraft:bucket\n"
+		"2026-04-01,12:04:00,Alex,使用桶交互,10,20,30,overworld,-,-,-,-,minecraft:water,minecraft:bucket\n" +
+		"2026-04-01,12:05:00,Alex,使用桶放置,10,20,30,overworld,-,-,-,-,-,minecraft:lava_bucket\n" +
+		"2026-04-01,12:06:00,Alex,使用桶收取,10,20,30,overworld,-,-,-,-,minecraft:water,-\n" +
+		"2026-04-01,12:07:00,Alex,使用桶收取,10,20,30,overworld,-,-,-,-,minecraft:lava,-\n" +
+		"2026-04-01,12:08:00,Alex,使用桶收取,99,99,99,overworld,-,-,-,-,minecraft:water,-\n"
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -212,8 +216,8 @@ func TestPublicCoordinateScanIncludesBlocksAndBucketInteractions(t *testing.T) {
 	if err := scanPublicCoordinateFile(RemoteLogFile{Path: path, FileName: "player_actions_2026-04-01.csv"}, criteria, &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.MatchedRows != 4 || len(result.Rows) != 4 {
-		t.Fatalf("matched rows = %d, rows = %d; want break/place and both bucket actions", result.MatchedRows, len(result.Rows))
+	if result.MatchedRows != 7 || len(result.Rows) != 7 {
+		t.Fatalf("matched rows = %d, rows = %d; want block actions and legacy/native buckets inside radius", result.MatchedRows, len(result.Rows))
 	}
 	bucketPlace := result.Rows[2]
 	if bucketPlace.X2 != "10" || bucketPlace.Y2 != "20" || bucketPlace.Z2 != "30" {
@@ -222,13 +226,59 @@ func TestPublicCoordinateScanIncludesBlocksAndBucketInteractions(t *testing.T) {
 	if bucketPlace.Detail2 != "minecraft:water_bucket" || bucketPlace.Detail2Display != "水桶" {
 		t.Fatalf("public bucket detail = %q, display = %q", bucketPlace.Detail2, bucketPlace.Detail2Display)
 	}
-	for _, action := range []string{"破坏方块", "放置方块", "使用桶放置", "使用桶交互"} {
+	for _, row := range result.Rows[4:] {
+		if row.X2 != "10" || row.Y2 != "20" || row.Z2 != "30" {
+			t.Fatalf("native bucket coordinates not exposed: %#v", row)
+		}
+	}
+	if row := result.Rows[4]; row.Action != "使用桶放置" || row.Detail1 != "-" || row.Detail2Display != "熔岩桶" {
+		t.Fatalf("native placement details changed: %#v", row)
+	}
+	for i, display := range []string{"水", "熔岩"} {
+		row := result.Rows[5+i]
+		if row.Action != "使用桶收取" || row.Detail2 != "-" || row.Detail1Display != display {
+			t.Fatalf("native collection details changed: %#v", row)
+		}
+	}
+	for _, action := range []string{"破坏方块", "放置方块", "使用桶放置", "使用桶收取", "使用桶交互"} {
 		if !isPublicCoordinateAction(action) {
 			t.Fatalf("expected public coordinate action %q to be allowed", action)
 		}
 	}
 	if isPublicCoordinateAction("打开容器") {
 		t.Fatal("unexpectedly allowed non-public coordinate action")
+	}
+}
+
+func TestPublicCoordinateScanUsesContainerPositionAndPreservesItemCount(t *testing.T) {
+	path := t.TempDir() + "/player_actions_2026-10-23.csv"
+	contents := "2026-10-23,03:29:26,Lcmnn,放入容器,64,64,55,主世界,66,64,56,主世界,minecraft:lava_bucket,x1\n" +
+		"2026-10-23,03:29:28,Lcmnn,从容器取出,65,64,55,主世界,66,64,56,主世界,minecraft:lava_bucket,x1\n" +
+		"2026-10-23,03:30:00,Lcmnn,放入容器,66,64,56,主世界,80,64,56,主世界,minecraft:lava_bucket,x1\n" +
+		"2026-10-23,03:30:01,Lcmnn,从容器取出,66,64,56,主世界,-,-,-,-,minecraft:lava_bucket,x1\n" +
+		"2026-10-23,03:30:02,Lcmnn,打开容器,64,64,55,主世界,66,64,56,主世界,minecraft:chest,-\n"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	criteria := logQueryCriteria{
+		queryType: queryTypeCoordinate,
+		x1:        66, y1: 64, z1: 56, x2: 66, y2: 64, z2: 56, dimension: "主世界",
+	}
+	result := PublicCoordinateLogQueryView{}
+	if err := scanPublicCoordinateFile(RemoteLogFile{Path: path}, criteria, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ScannedRows != 5 || result.MatchedRows != 2 || len(result.Rows) != 2 {
+		t.Fatalf("container query matched player position, missing target or unrelated action: %#v", result)
+	}
+	for i, action := range []string{"放入容器", "从容器取出"} {
+		row := result.Rows[i]
+		if row.Action != action || row.X2 != "66" || row.Y2 != "64" || row.Z2 != "56" || row.Dimension2 != "主世界" {
+			t.Fatalf("container action/coordinates changed: %#v", row)
+		}
+		if row.X != []string{"64", "65"}[i] || row.Detail1 != "minecraft:lava_bucket" || row.Detail1Display != "熔岩桶" || row.Detail2 != "x1" {
+			t.Fatalf("container item/count or player position changed: %#v", row)
+		}
 	}
 }
 

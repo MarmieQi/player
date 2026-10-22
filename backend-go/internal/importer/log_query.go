@@ -332,6 +332,10 @@ func isPublicCoordinateAction(raw string) bool {
 	if parseAction(raw) != "" {
 		return true
 	}
+	switch strings.TrimSpace(raw) {
+	case "放入容器", "从容器取出":
+		return true
+	}
 	return isBucketAction(raw)
 }
 
@@ -773,7 +777,7 @@ func populateBucketInteractionCoordinates(row *LogQueryRow) {
 
 func isBucketAction(action string) bool {
 	switch strings.TrimSpace(action) {
-	case "使用桶放置", "使用桶交互":
+	case "使用桶放置", "使用桶收取", "使用桶交互":
 		return true
 	default:
 		return false

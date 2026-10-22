@@ -2,6 +2,7 @@ package share
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 
@@ -63,6 +64,10 @@ func TestLogQuerySnapshotCompressionRoundTrip(t *testing.T) {
 	want := []importer.LogQueryRow{
 		{FileName: "player_actions_2026-08-08.csv", LineNumber: 10, PlayerName: "Steve", Action: "破坏方块", X2: "1", Y2: "2", Z2: "3", Detail1: "minecraft:cobblestone", Detail1Display: "圆石"},
 		{FileName: "player_actions_2026-08-08.csv", LineNumber: 11, PlayerName: "Alex", Action: "放置方块", X2: "4", Y2: "5", Z2: "6"},
+		{FileName: "player_actions_2026-08-08.csv", LineNumber: 12, PlayerName: "Alex", Action: "使用桶放置", X2: "46", Y2: "66", Z2: "30", Detail1: "-", Detail2: "minecraft:water_bucket", Detail2Display: "水桶"},
+		{FileName: "player_actions_2026-08-08.csv", LineNumber: 13, PlayerName: "Alex", Action: "使用桶收取", X2: "48", Y2: "66", Z2: "29", Detail1: "minecraft:lava", Detail1Display: "熔岩", Detail2: "-"},
+		{FileName: "player_actions_2026-10-23.csv", LineNumber: 14, PlayerName: "Lcmnn", Action: "放入容器", X: "64", Y: "64", Z: "55", X2: "66", Y2: "64", Z2: "56", Detail1: "minecraft:lava_bucket", Detail1Display: "熔岩桶", Detail2: "x1"},
+		{FileName: "player_actions_2026-10-23.csv", LineNumber: 15, PlayerName: "Lcmnn", Action: "从容器取出", X: "65", Y: "64", Z: "55", X2: "66", Y2: "64", Z2: "56", Detail1: "minecraft:lava_bucket", Detail1Display: "熔岩桶", Detail2: "x1"},
 	}
 	payload, err := compressLogQueryRows(want)
 	if err != nil {
@@ -75,7 +80,7 @@ func TestLogQuerySnapshotCompressionRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != len(want) || got[0].PlayerName != want[0].PlayerName || got[0].Detail1Display != want[0].Detail1Display || got[1].Action != want[1].Action {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("round trip rows = %#v, want %#v", got, want)
 	}
 }
