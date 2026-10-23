@@ -1,7 +1,8 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { Activity, ArrowDownToLine, ChevronLeft, Database, LayoutDashboard, LogOut, Menu, PanelLeftClose, Search, Settings, ShieldCheck, UserRound, X } from 'lucide-vue-next'
+import { Activity, ArrowDownToLine, Database, LayoutDashboard, Menu, Search, Settings, ShieldCheck, X } from 'lucide-vue-next'
 import { adminNavigation, adminPage } from './navigation'
+import AdminAccountMenu from './AdminAccountMenu.vue'
 import './admin-theme.css'
 import './admin.css'
 
@@ -81,8 +82,10 @@ onUnmounted(() => {
     <div v-if="drawerOpen" class="admin-nav-backdrop" aria-hidden="true" @click="closeDrawer"></div>
     <aside id="admin-navigation" ref="sidebar" class="admin-sidebar" :inert="mobile && !drawerOpen" :aria-hidden="mobile && !drawerOpen ? true : undefined" :role="mobile && drawerOpen ? 'dialog' : undefined" :aria-modal="mobile && drawerOpen ? true : undefined" aria-label="后台导航">
       <div class="admin-brand">
-        <span class="admin-brand-mark"><Database :size="23" /></span>
-        <div class="admin-nav-copy"><strong>日志管理</strong><span>服务器管理控制台</span></div>
+        <component :is="mobile ? 'div' : 'button'" class="admin-brand-toggle" :type="mobile ? undefined : 'button'" :aria-label="mobile ? undefined : `日志管理：${collapsed ? '展开导航' : '收起导航'}`" :title="mobile ? undefined : (collapsed ? '展开导航' : '收起导航')" :aria-expanded="mobile ? undefined : !collapsed" @click="!mobile && (collapsed = !collapsed)">
+          <span class="admin-brand-mark"><Database :size="23" /></span>
+          <span class="admin-nav-copy"><strong>日志管理</strong><span>服务器管理控制台</span></span>
+        </component>
         <button class="admin-mobile-close" type="button" aria-label="关闭导航" @click="closeDrawer"><X :size="20" /></button>
       </div>
       <nav class="admin-navigation" aria-label="管理菜单">
@@ -96,13 +99,7 @@ onUnmounted(() => {
         </div>
       </nav>
       <div class="admin-sidebar-bottom">
-        <button class="admin-collapse-toggle" type="button" :aria-expanded="!collapsed" aria-label="切换侧栏宽度" @click="collapsed = !collapsed"><PanelLeftClose :size="18" /><span class="admin-nav-copy">收起导航</span></button>
-        <button class="admin-account" :class="{ active: active === 'profile' }" type="button" title="个人中心" @click="selectPage('profile')">
-          <span class="admin-avatar"><UserRound :size="19" /></span>
-          <span class="admin-nav-copy"><strong>{{ account || '管理员' }}</strong><small>管理员账号</small></span>
-          <ChevronLeft class="admin-account-arrow" :size="16" />
-        </button>
-        <button class="admin-logout" type="button" title="退出登录" @click="emit('logout')"><LogOut :size="17" /><span class="admin-nav-copy">退出登录</span></button>
+        <AdminAccountMenu :key="`${mobile}:${collapsed}:${drawerOpen}:${active}`" :account="account" :active="active === 'profile'" @profile="selectPage('profile')" @logout="emit('logout')" />
       </div>
     </aside>
     <div class="admin-frame" :inert="mobile && drawerOpen">

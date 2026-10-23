@@ -1,88 +1,82 @@
 # 玩家日志统计
 
-基岩版 Minecraft 玩家日志统计工具。项目读取 `PlayerLogger.js` 生成的 CSV，支持本地目录或 SMB 远程复制，导入 MySQL 后提供玩家统计、矿物统计、日志查询、矿透分析、分享页面和 AstrBot 插件接口。
+基岩版 Minecraft 玩家日志统计工具。项目读取 PlayerLogger 生成的 CSV，支持本地目录或 SMB 远程复制，导入 MySQL 后提供玩家统计、矿物统计、日志查询、矿透分析、分享页面和 AstrBot 插件接口。
 
 当前后端是 Go：`backend-go`。前端目录是 Vue 3：`frontend-vue`。
 
 ## Docker 部署
 
-GitHub Actions 会在 `main` 分支推送后构建并推送两个 Docker 镜像：
+GitHub Actions 在 `main` 分支检查通过后发布前后端镜像。服务器只需 Docker / Docker Compose，不需要安装 Go、Node 或单独的 MySQL。
 
-```text
-ghcr.io/marmieqi/player-backend:latest
-ghcr.io/marmieqi/player-frontend:latest
-```
+服务器部署文件分工：
 
-服务器只需要 Docker / Docker Compose，不需要 clone 整个项目。新建一个空目录，直接下载部署文件：
+- `docker-compose.yml`：仓库维护的服务结构，不再填写服务器密码。
+- `.env`：服务器自己的端口、密码、JWT 密钥、数据目录和镜像标签，不提交 Git。
+- [.env.example](.env.example)：每项均有中文说明的模板，只在首次安装时复制。
+- `docker-data/`：数据库、归档 CSV 和临时任务文件。
+
+首次部署在空目录中执行：
 
 ```bash
 mkdir -p /vol1/1000/docker/player
 cd /vol1/1000/docker/player
 curl -fsSL https://raw.githubusercontent.com/MarmieQi/player/main/docker-compose.yml -o docker-compose.yml
-mkdir -p docker-data/synced-logs/main docker-data/synced-logs/sub docker-data/mysql docker-data/temp
-docker compose pull
-docker compose up -d
+curl -fsSL https://raw.githubusercontent.com/MarmieQi/player/main/.env.example -o .env.example
+cp .env.example .env
+chmod 600 .env
 ```
 
-如果你想保留源码再部署，也可以 clone，但要在空目录的上一级执行：
+编辑 `.env`，填写 `MYSQL_PASSWORD`、`MYSQL_ROOT_PASSWORD`、`APP_ADMIN_PASSWORD`、`APP_ADMIN_JWT_SECRET` 四个必填项，再执行：
 
 ```bash
-cd /vol1/1000/docker
-git clone https://github.com/MarmieQi/player.git
-cd player
-docker compose pull
+docker compose config --quiet &&
+docker compose pull &&
 docker compose up -d
+
+docker compose ps
+docker compose logs --tail=100 backend frontend
 ```
 
-默认入口：
+`config --quiet` 只校验，不打印展开后的密码。Compose 会自动读取同目录 `.env`；同名 shell 环境变量优先于文件，排查时注意已有的导出变量。密码含 `$`、`#`、空格时在 `.env` 使用英文单引号，例如 `MYSQL_PASSWORD='你自己的密码'`。
 
-```text
-公开页面 / AstrBot 接口：http://服务器IP:9493
-管理后台：http://服务器IP:8843
-```
+默认公开端口为 `9493`，后台端口为 `8843`，初始管理员名为 `admin`。密码由你填写，没有可直接用于生产的内置部署密码。已有管理员不会因修改初始密码而被覆盖，后续在后台“个人中心”修改密码。
 
-默认管理员：
+也可以 clone 源码后部署：在仓库根目录首次复制 `.env.example` 为 `.env`、填写配置，然后执行同样的 Compose 命令。
 
-```text
-账号：admin
-密码：admin123456
-```
-
-生产环境请先修改 `docker-compose.yml` 里的 `APP_ADMIN_PASSWORD`、`APP_ADMIN_JWT_SECRET`、MySQL 密码和对外端口。账号创建后，再改 `APP_ADMIN_PASSWORD` 不会覆盖旧密码，后续请在管理后台改密码。
-
-如果 `docker compose pull` 提示 `unauthorized`，通常是两个原因之一：
-
-- GitHub Actions 还没成功构建并推送 `latest` 镜像。
-- GHCR 镜像包默认是 Private，还没有设置成 Public。
-
-处理方式：先打开 GitHub 仓库的 Actions 页面，确认最新的 `Build` 已成功；然后在 GitHub 仓库的 Packages 里把 `player-backend` 和 `player-frontend` 两个镜像设为 Public。也可以不公开镜像，在服务器登录 GHCR：
-
-```bash
-echo YOUR_GITHUB_TOKEN | docker login ghcr.io -u MarmieQi --password-stdin
-```
-
-这个 token 至少需要 `read:packages` 权限。
+如果拉取镜像提示 `unauthorized`，先确认对应 GitHub Actions 构建成功、镜像标签存在，以及 GHCR 包可公开拉取；私有包需使用具有 `read:packages` 权限的账号登录 `ghcr.io`。
 
 ## 更新部署
 
-如果你是免 clone 部署，更新时执行：
+先确认本次 GitHub Actions 的前后端镜像均已发布成功。日常更新保留现有 `.env` 和 `docker-compose.yml`，只拉取应用镜像，不顺带更新 MySQL：
 
 ```bash
 cd /vol1/1000/docker/player
-curl -fsSL https://raw.githubusercontent.com/MarmieQi/player/main/docker-compose.yml -o docker-compose.yml
-docker compose pull
-docker compose up -d
+docker compose config --quiet &&
+docker compose pull backend frontend &&
+docker compose up -d --no-deps backend frontend
+
+docker compose ps
+docker compose logs --tail=100 backend frontend
 ```
 
-如果你是 clone 源码部署，更新时执行：
+`.env` 的 `IMAGE_TAG` 同时控制前后端版本，默认 `latest`。需要配套部署或回滚时，填写同一次成功构建的完整提交 SHA；回滚应用前另行确认数据库迁移兼容性，不能仅靠切换镜像恢复数据库。
 
-```bash
-git pull
-docker compose pull
-docker compose up -d
-```
+只有服务结构发生变化时才更新 Compose：先下载为 `docker-compose.yml.new`，对照并保留本地定制，备份原文件后再替换；不要重复复制模板覆盖 `.env`。clone 部署先确认本地配置已迁出 Compose，再拉取代码。MySQL 镜像更新单独安排并先备份数据库。
 
-`docker-data/` 是持久化数据目录，不要删除。
+## 已有服务器迁移到 .env
+
+第一次使用新 Compose 前先备份原配置和数据库。可使用[一次性迁移工具](scripts/README.md#一次性旧配置迁移)从原 Compose 生成带中文注释的 `.env.migrated`，核对后再启用；也可以复制 `.env.example` 为 `.env`，逐项迁入原值：
+
+1. 原 `MYSQL_PASSWORD`、`MYSQL_ROOT_PASSWORD`、数据库名和用户名；后端自动复用普通用户凭据，不需要再填一份。
+2. 原 `APP_ADMIN_JWT_SECRET`，以及初始管理员用户名和密码。保留 JWT 密钥可避免迁移导致全部登录失效。
+3. 原公开/管理端口、数据根目录、镜像标签；已有数据必须继续挂载原路径。
+4. 如原本自定义了主服、2服的本地目录或文件规则，迁入相应高级项；高级布局不符合默认三个子目录时仍需保留自定义挂载。
+
+MySQL 环境密码只在新库初始化时创建用户，不能修改已有数据库密码；管理员初始密码也不能重置已有账号。SMB、定时任务、日志源和分享设置已经保存在数据库中，迁移 `.env` 不会覆盖它们。
+
+确认 `.env` 完整后再换新 Compose、运行 `docker compose config --quiet` 并重建容器。迁移仅需执行一次，不能用模板中的空值替代原有密码。
+
+`docker-data/` 或 `DATA_DIRECTORY` 指向的目录是持久化数据，不能删除。备份需包含服务器 `.env` 和数据库、CSV；MySQL 数据应通过数据库备份或停库后的一致性备份保存，不能直接热拷贝正在写入的数据目录。
 
 ## CSV 目录
 
@@ -103,31 +97,17 @@ player_actions_2026-05-02.csv
 
 默认会跳过当天或未来日期的 CSV，避免读取仍在写入的日志。
 
-## SMB 同步
+## SMB 同步与业务设置
 
-后台“系统设置”里可以配置 SMB，也可以直接修改环境变量：
+SMB 地址、账号、共享名、各日志源目录、自动复制/解析时间和分享有效期，在后台“系统设置”中修改，保存到 MySQL。已有部署以后台数据库记录为准，重建容器不会用 `.env` 覆盖这些值。
 
-```yaml
-PLAYER_LOGS_SMB_ENABLED: true
-PLAYER_LOGS_SMB_HOST: "192.168.1.10"
-PLAYER_LOGS_SMB_PORT: 445
-PLAYER_LOGS_SMB_DOMAIN: ""
-PLAYER_LOGS_SMB_USERNAME: "your-user"
-PLAYER_LOGS_SMB_PASSWORD: "your-password"
-PLAYER_LOGS_SMB_SHARE: "mcshare"
-PLAYER_LOGS_SMB_DIRECTORY: "logs"
-PLAYER_LOGS_SMB_FILE_GLOB: "player_actions_*.csv"
-PLAYER_LOGS_SMB_RECURSIVE: false
-PLAYER_LOGS_LIVE_TEMP_DIRECTORY: "/data/temp/live-log-query"
-PLAYER_LOGS_LIVE_CACHE_SECONDS: 120
-```
+`.env.example` 底部的 SMB 项只兼容新数据库首次初始化；没有 `SMB_ENABLED` 环境开关，是否自动复制、解析由后台每个服务器的任务开关控制。管理员密码在“个人中心”修改，AstrBot 密钥在后台生成或重置。
 
-SMB 复制会先把远程 CSV 拉到本地归档目录，再从本地文件解析入库。
-当天文件仍会跳过正式同步；管理员和公开日志查询会使用专用目录中的短期只读快照，查询完成且缓存过期后自动清理。
+SMB 复制先把远程 CSV 拉到本地归档目录，再从本地解析入库。正式同步默认跳过当天文件；当天日志查询使用短期只读快照。缓存秒数等启动参数见 `.env.example` 高级分组。
 
 ## 本地开发
 
-Go 后端：
+Go 后端（直接运行时读取进程环境变量，不会自动加载 Compose 的 `.env`）：
 
 ```powershell
 cd backend-go
@@ -170,7 +150,7 @@ npm run build
 
 插件开发与维护参考 [AstrBot 官方插件开发指南](https://docs.astrbot.app/dev/star/plugin-new.html)。
 
-后端玩家 ID 查询的完整接口约定见 [玩家 ID 存在性查询 API](backend-go/player-presence-api.md)。
+后端玩家 ID 查询的完整接口约定见 [玩家 ID 存在性查询 API](docs/api/player-presence.md)。
 
 插件目录：
 
@@ -205,10 +185,23 @@ api_key: 管理后台“系统设置”里的 AstrBot 插件密钥
 ## 项目结构
 
 ```text
-backend-go/                  Go 后端
-frontend-vue/                Vue 3 前端
-astrbot_plugin_player_stats/ AstrBot 插件
-PlayerLogger.js              基岩版日志插件脚本
-docker-compose.yml           拉取 GHCR 镜像部署
-.github/workflows/build.yml  GitHub Actions 构建和推送镜像
+backend-go/                  Go 后端源码、测试和 Dockerfile
+frontend-vue/                Vue 3 前端源码、测试和 Dockerfile
+astrbot_plugin_player_stats/ AstrBot 插件，保留独立插件目录
+integrations/playerlogger/   日志采集脚本与接入说明
+docs/                       项目文档索引与公共 API 约定
+.github/workflows/           GitHub Actions 构建和镜像发布
+scripts/                    部署配置校验脚本
+docker-compose.yml          部署结构模板
+.env.example                带中文注释的私有配置模板（实际 .env 不提交）
+.local/                      本地临时文件与运行日志（不提交）
 ```
+
+- [文档索引](docs/README.md)
+- [后端开发说明](backend-go/README.md)
+- [前端开发说明](frontend-vue/README.md)
+- [日志采集脚本说明](integrations/playerlogger/README.md)
+
+前后端源码路径、插件目录名和根目录 `docker-compose.yml` 保持稳定，供 CI、Docker 构建和服务器更新使用。模块内部文档放在对应模块旁，跨模块接口约定放在 `docs/api/`。
+
+已停用的 Java 后端、过时迁移资料和旧调试日志已清理。新的本地调试日志统一写入 `.local/logs/`，不参与构建或 Git 提交。运行数据继续使用 `docker-data/`。

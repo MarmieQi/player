@@ -1,18 +1,28 @@
-backend/target/
-backend/data/
-backend/
-backend-java/
-backend/synced-logs/
-docs/
-.idea/
-.vscode/
-docker-data/
-frontend-vue/node_modules/
-frontend-vue/dist/
-backend-go/tmp/
+# Local temporary files, development logs and deployment data
+/.local/
+/docker-data/
+/.idea/
+/.vscode/
+
+# Build output and dependencies
+/frontend-vue/node_modules/
+/frontend-vue/dist/
+/backend-go/tmp/
+
+# Only reviewed, current project documentation is versioned
+/docs/*
+!/docs/README.md
+!/docs/api/
+
+# Runtime files
 *.log
 *.db
 *.mv.db
 *.trace.db
 __pycache__/
 *.pyc
+
+# Private deployment configuration
+.env
+.env.*
+!.env.example
