@@ -3277,13 +3277,11 @@ function toggleAllImportFileSelection(checked) {
   <AdminLayout v-else :active="activeAdminPage" :account="currentAdmin" :server-time="serverTimeDisplay" @navigate="navigateAdmin" @logout="logout">
   <main class="app-shell">
     <section v-if="currentView === 'settingsPage'" class="result-page">
-      <div class="topbar">
-        <div class="actions">
+      <div class="admin-settings-actions">
           <button class="primary-button" type="button" :disabled="settingsSaving || settingsLoading" @click="saveSyncConfig">
             <Save :size="18" />
             <span>{{ settingsSaving ? '保存中' : '保存设置' }}</span>
           </button>
-        </div>
       </div>
 
       <p v-if="error" class="notice error">{{ error }}</p>

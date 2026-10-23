@@ -87,6 +87,7 @@
 .admin-workspace .primary-button, .admin-workspace .secondary-button { font-weight: 500; font-size: 14px; }
 .admin-workspace :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea) { min-width: 0; max-width: 100%; border-color: #d9e2eb; border-radius: 7px; color: #34485e; }
 .admin-workspace .settings-form label, .admin-workspace .settings-form label > span { color: #46556a; }
+.admin-workspace .admin-settings-actions { display: flex; justify-content: flex-end; align-items: center; gap: 12px; }
 .admin-workspace .settings-form { padding: 8px 0; }
 .admin-workspace .settings-form label, .admin-workspace .log-query-form label { font-size: 13px; font-weight: 500; color: #46556a; }
 .admin-workspace .settings-form input, .admin-workspace .log-query-form input, .admin-workspace .settings-form select { font-size: 14px; font-weight: 400; }
