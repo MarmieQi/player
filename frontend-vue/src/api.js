@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
+const API_BASE_URL = import.meta.env?.VITE_API_BASE_URL || ''
 const AUTH_TOKEN_KEY = 'player-stats-admin-token'
 
 export function getAuthToken() {
@@ -36,7 +36,8 @@ export async function apiPost(path, params = {}, options = {}) {
     method: 'POST',
     headers: authHeaders({
       Accept: 'application/json'
-    }, options)
+    }, options),
+    signal: options.signal
   })
   return parseResponse(response)
 }
@@ -49,7 +50,8 @@ export async function apiPostJson(path, body = {}, options = {}) {
       Accept: 'application/json',
       'Content-Type': 'application/json'
     }, options),
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal: options.signal
   })
   return parseResponse(response)
 }
@@ -62,7 +64,8 @@ export async function apiPutJson(path, body = {}, options = {}) {
       Accept: 'application/json',
       'Content-Type': 'application/json'
     }, options),
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal: options.signal
   })
   return parseResponse(response)
 }
@@ -97,12 +100,20 @@ function authHeaders(headers = {}, options = {}) {
 }
 
 async function parseResponse(response) {
-  const payload = await response.json().catch(() => ({}))
+  let payload
+  try { payload = await response.json() }
+  catch (err) {
+    if (err.name === 'AbortError') throw err
+    if (response.ok && response.status !== 204) throw new Error('服务器响应格式无效，请重试')
+    payload = {}
+  }
   if (!response.ok) {
     if (response.status === 401) {
       clearAuthToken()
     }
-    throw new Error(payload.message || `请求失败: ${response.status}`)
+    const error = new Error(payload.message || `请求失败: ${response.status}`)
+    error.status = response.status
+    throw error
   }
   return payload
 }

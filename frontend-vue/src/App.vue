@@ -34,7 +34,8 @@ import {
   TreePine,
   Trash2,
   XCircle,
-  UserRound
+  UserRound,
+  UsersRound
 } from 'lucide-vue-next'
 import { apiDelete, apiGet, apiPost, apiPostJson, apiPutJson, clearAuthToken, getAuthToken, setAuthToken } from './api'
 import { isBucketLogAction, logQueryActionDisplay, logQuerySummaryDetailText, logShareActionClass } from './log-presentation'
@@ -47,6 +48,12 @@ const PublicMetricGrid = defineAsyncComponent(() => import('./components/PublicM
 const AdminLogin = defineAsyncComponent(() => import('./admin/AdminLogin.vue'))
 const PlayerNameAutocomplete = defineAsyncComponent(() => import('./admin/PlayerNameAutocomplete.vue'))
 const LogActionFilter = defineAsyncComponent(() => import('./admin/LogActionFilter.vue'))
+const FileSyncPage = defineAsyncComponent(() => import('./admin/FileSyncPage.vue'))
+const SmbDirectorySettings = defineAsyncComponent(() => import('./admin/SmbDirectorySettings.vue'))
+const GroupChatCopySchedule = defineAsyncComponent(() => import('./admin/GroupChatCopySchedule.vue'))
+const GroupChatCopyPage = defineAsyncComponent(() => import('./admin/GroupChatCopyPage.vue'))
+const GroupChatCopySettings = defineAsyncComponent(() => import('./admin/GroupChatCopySettings.vue'))
+const GroupChatPage = defineAsyncComponent(() => import('./admin/GroupChatPage.vue'))
 const AdminSelect = defineAsyncComponent(() => import('./admin/AdminSelect.vue'))
 const LogQueryTabs = defineAsyncComponent(() => import('./admin/LogQueryTabs.vue'))
 
@@ -62,7 +69,13 @@ const syncLocalFiles = ref([])
 const syncSkipToday = ref(true)
 const importSkipToday = ref(true)
 const syncConfig = ref(null)
+const savedSyncConfig = ref('')
+const settingsDirty = computed(() => Boolean(syncConfig.value) && JSON.stringify(syncConfig.value) !== savedSyncConfig.value)
+let sourcePreviewVersion = 0
 const settingsSaving = ref(false)
+const chatDirectorySettings = ref(null)
+const chatScheduleSettings = ref(null)
+const chatSettingsReady = computed(() => chatDirectorySettings.value?.ready && chatScheduleSettings.value?.ready)
 const settingsLoading = ref(false)
 const smbTesting = ref(false)
 const autoTaskLogs = ref([])
@@ -116,7 +129,6 @@ const importPageLoading = ref(false)
 const resetRemotePath = ref('')
 const selectedResetKeys = ref(new Set())
 const deletingLocalCsv = ref(false)
-const selectedLocalDeleteKeys = ref(new Set())
 const loginForm = ref({
   username: 'admin',
   password: ''
@@ -400,44 +412,6 @@ const selectedLogQueryLoading = computed(() => (
 const selectedLogQueryPage = computed(() => selectedLogQueryResult.value?.page || logQueryPages.value[logQueryStateKey(logQueryServerId.value)] || 1)
 const selectedLogQueryPageSize = computed(() => selectedLogQueryResult.value?.pageSize || logQueryPageSizes.value[logQueryStateKey(logQueryServerId.value)] || 100)
 const selectedLogQueryTotalPages = computed(() => selectedLogQueryResult.value?.totalPages || 0)
-const syncPageFiles = computed(() => {
-  const jobFiles = syncJob.value?.files || []
-  if (!jobFiles.length) {
-    return remoteFiles.value
-  }
-
-  const jobFileMap = new Map(jobFiles.map((file) => [fileCompareKey(file), file]))
-  const mergedFiles = remoteFiles.value.map((remoteFile) => {
-    const key = fileCompareKey(remoteFile)
-    const jobFile = jobFileMap.get(key)
-    if (!jobFile) {
-      return remoteFile
-    }
-    jobFileMap.delete(key)
-    return {
-      ...remoteFile,
-      ...jobFile,
-      remotePath: remoteFile.remotePath || jobFile.remotePath,
-      fileName: remoteFile.fileName || jobFile.fileName,
-      fileSize: jobFile.fileSize || remoteFile.fileSize
-    }
-  })
-
-  return [...mergedFiles, ...jobFileMap.values()]
-})
-const syncLocalFileMap = computed(() => {
-  const fileMap = new Map()
-  for (const file of syncLocalFiles.value) {
-    fileMap.set(fileCompareKey(file), file)
-  }
-  return fileMap
-})
-const deletableLocalCopyFiles = computed(() => syncPageFiles.value.filter(canDeleteLocalCopy))
-const selectedLocalDeleteCount = computed(() => selectedLocalDeleteKeys.value.size)
-const allLocalCopiesSelected = computed(() => {
-  const files = deletableLocalCopyFiles.value
-  return files.length > 0 && files.every((file) => selectedLocalDeleteKeys.value.has(localCopyKey(file)))
-})
 const eligibleImportFiles = computed(() => importPageFiles.value.filter(canDeleteImportRecord))
 const selectedResetCount = computed(() => selectedResetKeys.value.size)
 const allEligibleSelected = computed(() => {
@@ -902,7 +876,6 @@ async function openSyncPage(serverId = filters.value.serverId) {
   syncingFiles.value = false
   remoteFiles.value = []
   syncLocalFiles.value = []
-  selectedLocalDeleteKeys.value = new Set()
   importMessage.value = ''
   error.value = ''
   await loadSyncPageFiles()
@@ -922,7 +895,6 @@ async function loadSyncPageFiles() {
     ])
     remoteFiles.value = asArray(remoteData)
     syncLocalFiles.value = asArray(localData)
-    selectedLocalDeleteKeys.value = new Set()
   } catch (err) {
     handleApiError(err)
   } finally {
@@ -989,14 +961,12 @@ async function loadSyncLocalFiles() {
     syncLocalFiles.value = asArray(await apiGet('/api/import/files', {
       serverId: filters.value.serverId === 'all' ? '' : filters.value.serverId
     }))
-    selectedLocalDeleteKeys.value = new Set()
   } catch (err) {
     handleApiError(err)
   }
 }
 
-async function deleteSelectedLocalCsv() {
-  const files = syncPageFiles.value.filter((file) => selectedLocalDeleteKeys.value.has(localCopyKey(file)))
+async function deleteSelectedLocalCsv(files) {
   if (!files.length) {
     return
   }
@@ -1011,18 +981,11 @@ async function deleteSelectedLocalCsv() {
   importMessage.value = ''
   try {
     const results = await apiPostJson('/api/import/local-files/delete', {
-      files: files.map((file) => {
-        const localFile = localFileForRemote(file)
-        return {
-          serverId: localFile.serverId,
-          remotePath: localFile.remotePath
-        }
-      })
+      files: files.map(file => ({ serverId: file.serverId, remotePath: file.remotePath }))
     })
     const deletedCount = results.filter((result) => result.deleted).length
     const failedCount = results.length - deletedCount
     importMessage.value = `已删除 ${deletedCount} 个本地 CSV${failedCount ? `，失败 ${failedCount} 个` : ''}`
-    selectedLocalDeleteKeys.value = new Set()
     await loadSyncPageFiles()
   } catch (err) {
     handleApiError(err)
@@ -1772,7 +1735,9 @@ async function loadSyncConfig() {
   error.value = ''
   try {
     syncConfig.value = normalizeSyncConfig(await apiGet('/api/config/sync'))
-    loadAllSourceFiles()
+    savedSyncConfig.value = JSON.stringify(syncConfig.value)
+    sourcePreviewVersion++
+    sourceFiles.value = {}; sourceFilesLoading.value = {}
   } catch (err) {
     handleApiError(err)
   } finally {
@@ -1901,7 +1866,16 @@ async function saveSyncConfig() {
   error.value = ''
   importMessage.value = ''
   try {
+    const directory = chatDirectorySettings.value
+    const schedule = chatScheduleSettings.value
+    directory.validate()
+    schedule.validate()
     syncConfig.value = normalizeSyncConfig(await apiPutJson('/api/config/sync', syncConfig.value))
+    savedSyncConfig.value = JSON.stringify(syncConfig.value)
+    sourcePreviewVersion++
+    sourceFiles.value = {}; sourceFilesLoading.value = {}
+    await directory.save()
+    await schedule.save()
     await loadAutoTaskLogs()
     importMessage.value = '配置已保存'
   } catch (err) {
@@ -1912,9 +1886,11 @@ async function saveSyncConfig() {
 }
 
 async function loadSourceFiles(sourceId) {
+  const version = sourcePreviewVersion
   sourceFilesLoading.value = { ...sourceFilesLoading.value, [sourceId]: true }
   try {
     const result = await apiGet('/api/config/source-files', { sourceId })
+    if (version !== sourcePreviewVersion) return
     if (result.success) {
       sourceFiles.value = { ...sourceFiles.value, [sourceId]: asArray(result.files) }
     } else {
@@ -1922,17 +1898,11 @@ async function loadSourceFiles(sourceId) {
       error.value = result.message
     }
   } catch (err) {
+    if (version !== sourcePreviewVersion) return
     sourceFiles.value = { ...sourceFiles.value, [sourceId]: [] }
     handleApiError(err)
   } finally {
-    sourceFilesLoading.value = { ...sourceFilesLoading.value, [sourceId]: false }
-  }
-}
-
-async function loadAllSourceFiles() {
-  if (!syncConfig.value?.sources) return
-  for (const source of syncConfig.value.sources) {
-    loadSourceFiles(source.sourceId)
+    if (version === sourcePreviewVersion) sourceFilesLoading.value = { ...sourceFilesLoading.value, [sourceId]: false }
   }
 }
 
@@ -1995,6 +1965,8 @@ async function navigateAdmin(id) {
   else if (id === 'logs') await openLogQueryPage(queryServerId)
   else if (id === 'xray') await openXrayAnalysisPage(queryServerId)
   else if (id === 'sync') await openSyncPage(serverId)
+  else if (id === 'txtCopy') { currentView.value = 'txtCopyPage'; window.location.hash = '#/txt-copy' }
+  else if (id === 'groupChat') { currentView.value = 'groupChatPage'; window.location.hash = '#/group-chat' }
   else if (id === 'import') await openImportPage(serverId)
   else if (id === 'settings') await openSettingsPage()
   else if (id === 'profile') openProfilePage()
@@ -2010,7 +1982,7 @@ async function handleAdminHashChange() {
         && logQueryMode.value === route.mode
         && (route.view !== 'xrayDetailPage' || xrayDetailPlayerName.value === route.playerName)) return
   } else {
-    const view = { '': 'dashboard', '#': 'dashboard', '#/sync': 'syncPage', '#/import': 'importPage', '#/settings': 'settingsPage', '#/profile': 'profilePage' }[hash]
+    const view = { '': 'dashboard', '#': 'dashboard', '#/sync': 'syncPage', '#/txt-copy': 'txtCopyPage', '#/group-chat': 'groupChatPage', '#/import': 'importPage', '#/settings': 'settingsPage', '#/profile': 'profilePage' }[hash]
     if (!view || currentView.value === view) return
     if (view === 'dashboard') { await goDashboard(); return }
   }
@@ -2028,6 +2000,10 @@ async function openInitialViewFromHash() {
     if (featureRoute.view === 'xrayDetailPage') await openXrayDetailPage(serverId, featureRoute.playerName)
     else if (featureRoute.view === 'xrayAnalysisPage') await openXrayAnalysisPage(serverId)
     else await openLogQueryPage(serverId, featureRoute.mode)
+  } else if (hash === '#/txt-copy') {
+    currentView.value = 'txtCopyPage'
+  } else if (hash === '#/group-chat') {
+    currentView.value = 'groupChatPage'
   } else if (hash === '#/sync') {
     await openSyncPage()
   } else if (hash === '#/import') {
@@ -2441,13 +2417,6 @@ function statusLabel(status, context = 'import') {
   return labels[status] || status
 }
 
-function syncFileMessage(file) {
-  if (file?.status === 'RUNNING' && (!file.message || file.message === '正在解析')) {
-    return '正在复制'
-  }
-  return file?.message || '-'
-}
-
 function statusClass(status) {
   return {
     imported: status === 'IMPORTED' || status === 'COPIED' || status === 'FINISHED',
@@ -2456,85 +2425,6 @@ function statusClass(status) {
     skipped: status === 'SKIPPED' || status === 'SKIPPED_TODAY' || status === 'INFO',
     failed: status === 'FAILED' || status === 'FINISHED_WITH_ERRORS'
   }
-}
-
-function fileCompareKey(file) {
-  return `${file.serverId}\n${file.fileName || fileNameFromPath(file.remotePath)}`
-}
-
-function localFileForRemote(remoteFile) {
-  return syncLocalFileMap.value.get(fileCompareKey(remoteFile))
-}
-
-function localCopyInfo(remoteFile) {
-  const localFile = localFileForRemote(remoteFile)
-  if (!localFile) {
-    return {
-      label: '未复制',
-      className: 'pending',
-      fileSize: 0,
-      message: '本地未找到'
-    }
-  }
-
-  const remoteSize = remoteFile?.fileSize || 0
-  const localSize = localFile.fileSize || 0
-  if (remoteSize && localSize && remoteSize !== localSize) {
-    return {
-      label: '大小不一致',
-      className: 'failed',
-      fileSize: localSize,
-      message: `本地 ${fileSize(localSize)}，状态：${statusLabel(localFile.status)}`
-    }
-  }
-
-  const remoteModified = new Date(remoteFile?.lastModified || 0).getTime()
-  const localModified = new Date(localFile.lastModified || 0).getTime()
-  if (remoteModified && localModified && remoteModified !== localModified) {
-    return {
-      label: '时间不一致',
-      className: 'pending',
-      fileSize: localSize,
-      message: `本地 ${formatDateTime(localFile.lastModified)}，远程 ${formatDateTime(remoteFile.lastModified)}，状态：${statusLabel(localFile.status)}`
-    }
-  }
-
-  return {
-    label: '已在本地',
-    className: 'imported',
-    fileSize: localSize,
-    message: `本地 ${fileSize(localSize)}，状态：${statusLabel(localFile.status)}`
-  }
-}
-
-function canDeleteLocalCopy(file) {
-  return Boolean(localFileForRemote(file)?.remotePath)
-}
-
-function localCopyKey(file) {
-  const localFile = localFileForRemote(file)
-  return localFile ? `${localFile.serverId}\n${localFile.remotePath}` : ''
-}
-
-function toggleLocalCopySelection(file, checked) {
-  const key = localCopyKey(file)
-  if (!key) {
-    return
-  }
-
-  const next = new Set(selectedLocalDeleteKeys.value)
-  if (checked) {
-    next.add(key)
-  } else {
-    next.delete(key)
-  }
-  selectedLocalDeleteKeys.value = next
-}
-
-function toggleAllLocalCopySelection(checked) {
-  selectedLocalDeleteKeys.value = checked
-    ? new Set(deletableLocalCopyFiles.value.map(localCopyKey).filter(Boolean))
-    : new Set()
 }
 
 function canDeleteImportRecord(file) {
@@ -3278,7 +3168,7 @@ function toggleAllImportFileSelection(checked) {
   <main class="app-shell">
     <section v-if="currentView === 'settingsPage'" class="result-page">
       <div class="admin-settings-actions">
-          <button class="primary-button" type="button" :disabled="settingsSaving || settingsLoading" @click="saveSyncConfig">
+          <button class="primary-button" type="button" :disabled="settingsSaving || settingsLoading || !chatSettingsReady" @click="saveSyncConfig">
             <Save :size="18" />
             <span>{{ settingsSaving ? '保存中' : '保存设置' }}</span>
           </button>
@@ -3390,50 +3280,9 @@ function toggleAllImportFileSelection(checked) {
           </div>
         </article>
 
-        <article v-for="source in syncConfig.sources" :key="source.id" class="panel wide">
-          <div class="panel-title">
-            <h2>{{ source.sourceName || source.sourceId }} - SMB 目录</h2>
-            <label class="toggle-label">
-              <input type="checkbox" v-model="source.enabled" />
-              <span>启用</span>
-            </label>
-          </div>
-          <div class="settings-form">
-            <label>
-              <span>目录路径</span>
-              <input type="text" v-model="source.smbDirectory" placeholder="例: logs/main" />
-            </label>
-            <label>
-              <span>文件匹配</span>
-              <input type="text" v-model="source.smbFileGlob" placeholder="例: player_actions_*.csv" />
-            </label>
-            <div class="settings-actions">
-              <button class="secondary-button" type="button" :disabled="sourceFilesLoading[source.sourceId]" @click="loadSourceFiles(source.sourceId)">
-                <RefreshCw :size="16" :class="{ spin: sourceFilesLoading[source.sourceId] }" />
-                <span>{{ sourceFilesLoading[source.sourceId] ? '加载中...' : '刷新文件列表' }}</span>
-              </button>
-            </div>
-          </div>
-          <div v-if="sourceFiles[source.sourceId]?.length" class="source-file-list">
-            <table class="data-table compact">
-              <thead>
-                <tr>
-                  <th>文件名</th>
-                  <th>大小</th>
-                  <th>修改时间</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="file in sourceFiles[source.sourceId]" :key="file.remotePath">
-                  <td class="path-cell">{{ file.fileName }}</td>
-                  <td>{{ fileSize(file.fileSize) }}</td>
-                  <td>{{ file.lastModified ? new Date(file.lastModified).toLocaleString('zh-CN') : '-' }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <p v-else-if="sourceFiles[source.sourceId] && !sourceFilesLoading[source.sourceId]" class="settings-hint" style="padding: 0.75rem 1.25rem;">该目录下没有文件，请检查目录路径设置</p>
-        </article>
+        <SmbDirectorySettings v-for="source in syncConfig.sources" :key="source.id" :title="`${source.sourceName || source.sourceId} - SMB 目录`" v-model:enabled="source.enabled" v-model:directory="source.smbDirectory" v-model:file-glob="source.smbFileGlob" directory-placeholder="例: logs/main" glob-placeholder="例: player_actions_*.csv" :disabled="settingsSaving" :refresh-disabled="settingsDirty" :refreshing="Boolean(sourceFilesLoading[source.sourceId])" :files="sourceFiles[source.sourceId] || []" :listed="Boolean(sourceFiles[source.sourceId])" @refresh="loadSourceFiles(source.sourceId)" />
+
+        <GroupChatCopySettings ref="chatDirectorySettings" :disabled="settingsSaving" :preview-disabled="settingsDirty" />
 
         <article class="panel wide">
           <div class="panel-title"><h2>自动任务</h2></div>
@@ -3442,7 +3291,7 @@ function toggleAllImportFileSelection(checked) {
               <input type="checkbox" v-model="syncConfig.skipToday" />
               <span>默认跳过当天文件</span>
             </label>
-            <p class="settings-hint">当天的日志文件仍在写入中，直接复制可能导致数据不完整。建议保持开启。</p>
+            <p class="settings-hint">统一控制 CSV 自动同步、解析和群服聊天 TXT 自动同步，默认开启。</p>
           </div>
           <div class="auto-task-list">
             <div v-for="task in syncConfig.autoTasks" :key="task.serverId" class="auto-task-row">
@@ -3472,6 +3321,7 @@ function toggleAllImportFileSelection(checked) {
               </div>
             </div>
           </div>
+          <GroupChatCopySchedule ref="chatScheduleSettings" :disabled="settingsSaving" />
           <p class="settings-hint schedule-hint">建议先复制 CSV，再间隔 5-10 分钟解析入库；主服和 2服可以设置不同时间，避免任务同时抢占。</p>
         </article>
 
@@ -3511,7 +3361,7 @@ function toggleAllImportFileSelection(checked) {
                   <td>{{ log.taskLabel || log.serverName || '-' }}</td>
                   <td>
                     <span class="status-pill" :class="statusClass(log.status)">
-                      {{ statusLabel(log.status, log.taskType === 'SYNC' ? 'sync' : 'import') }}
+                      {{ statusLabel(log.status, ['SYNC', 'CHAT_SYNC'].includes(log.taskType) ? 'sync' : 'import') }}
                     </span>
                   </td>
                   <td>{{ formatNumber(log.scannedFiles) }}</td>
@@ -3608,125 +3458,12 @@ function toggleAllImportFileSelection(checked) {
       </div>
     </section>
 
-    <section v-else-if="currentView === 'syncPage'" class="result-page">
-      <div class="topbar">
-        <div class="actions">
-          <div class="admin-server-picker">
-            <AdminSelect :model-value="filters.serverId" :options="adminServerOptions" label="任务服务器" caption="服务器" @update:model-value="openSyncPage" />
-          </div>
-          <button class="icon-button ghost" type="button" title="刷新文件对比" :disabled="syncPageLoading || syncJobRunning" @click="loadSyncPageFiles">
-            <RefreshCw :size="18" :class="{ spin: syncPageLoading }" />
-          </button>
-          <label class="toggle-label">
-            <input type="checkbox" v-model="syncSkipToday" :disabled="syncJobRunning" />
-            <span>跳过当天文件</span>
-          </label>
-          <button class="primary-button" type="button" :disabled="syncingFiles || syncJobRunning" @click="startSyncJob">
-            <Play :size="18" />
-            <span>{{ syncJobRunning ? '复制中' : `开始复制 ${selectedServerName}` }}</span>
-          </button>
-        </div>
-      </div>
+    <GroupChatCopyPage v-else-if="currentView === 'txtCopyPage'" @settings="openSettingsPage" />
+    <GroupChatPage v-else-if="currentView === 'groupChatPage'" />
 
-      <p v-if="error" class="notice error">{{ error }}</p>
-      <p v-if="importMessage" class="notice success">{{ importMessage }}</p>
-
-      <section class="result-summary-grid">
-        <article class="metric-card compact">
-          <div class="metric-icon blue"><FileText :size="20" /></div>
-          <p>扫描文件</p>
-          <strong>{{ formatNumber(syncJob?.scannedFiles || 0) }}</strong>
-        </article>
-        <article class="metric-card compact">
-          <div class="metric-icon green"><CheckCircle2 :size="20" /></div>
-          <p>已复制</p>
-          <strong>{{ formatNumber(syncJob?.importedFiles || 0) }}</strong>
-        </article>
-        <article class="metric-card compact">
-          <div class="metric-icon amber"><CircleSlash :size="20" /></div>
-          <p>跳过</p>
-          <strong>{{ formatNumber(syncJob?.skippedFiles || 0) }}</strong>
-        </article>
-        <article class="metric-card compact">
-          <div class="metric-icon red"><XCircle :size="20" /></div>
-          <p>失败</p>
-          <strong>{{ formatNumber(syncJob?.failedFiles || 0) }}</strong>
-        </article>
-      </section>
-
-      <article class="panel wide">
-        <div class="panel-title">
-          <h2>文件复制情况</h2>
-          <span>{{ statusLabel(syncJob?.status || 'READY', 'sync') }}</span>
-        </div>
-        <div class="bulk-actions">
-          <label class="bulk-check">
-            <input
-              type="checkbox"
-              :checked="allLocalCopiesSelected"
-              :disabled="syncJobRunning || !deletableLocalCopyFiles.length"
-              @change="toggleAllLocalCopySelection($event.target.checked)"
-            />
-            <span>选择已在本地</span>
-          </label>
-          <button
-            class="table-action danger"
-            type="button"
-            :disabled="syncJobRunning || deletingLocalCsv || !selectedLocalDeleteCount"
-            @click="deleteSelectedLocalCsv"
-          >
-            <Trash2 :size="15" />
-            <span>{{ deletingLocalCsv ? '删除中' : `删除本地 CSV ${selectedLocalDeleteCount}` }}</span>
-          </button>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>选择</th>
-                <th>文件</th>
-                <th>服务器</th>
-                <th>状态</th>
-                <th>远程大小</th>
-                <th>本地对比</th>
-                <th>本地大小</th>
-                <th>说明</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="file in syncPageFiles" :key="`${file.serverId}:${file.remotePath}`">
-                <td>
-                  <input
-                    type="checkbox"
-                    :checked="selectedLocalDeleteKeys.has(localCopyKey(file))"
-                    :disabled="syncJobRunning || !canDeleteLocalCopy(file)"
-                    @change="toggleLocalCopySelection(file, $event.target.checked)"
-                  />
-                </td>
-                <td class="path-cell" :title="file.remotePath">{{ file.fileName || fileNameFromPath(file.remotePath) }}</td>
-                <td>{{ file.serverName }}</td>
-                <td>
-                  <span class="status-pill" :class="statusClass(file.status)">
-                    {{ statusLabel(file.status, 'sync') }}
-                  </span>
-                </td>
-                <td>{{ fileSize(file.fileSize) }}</td>
-                <td>
-                  <span class="status-pill" :class="localCopyInfo(file).className" :title="localCopyInfo(file).message">
-                    {{ localCopyInfo(file).label }}
-                  </span>
-                </td>
-                <td>{{ localCopyInfo(file).fileSize ? fileSize(localCopyInfo(file).fileSize) : '-' }}</td>
-                <td class="message-cell">{{ syncFileMessage(file) }}</td>
-              </tr>
-              <tr v-if="!syncPageFiles.length">
-                <td colspan="8" class="empty">{{ syncPageLoading ? '正在加载文件对比...' : syncJobRunning ? '正在复制 CSV 文件' : '未找到远程文件，请检查 SMB 设置' }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </article>
-    </section>
+    <FileSyncPage v-else-if="currentView === 'syncPage'" :key="filters.serverId" extension="CSV" :scope-name="selectedServerName" :remote-files="remoteFiles" :local-files="syncLocalFiles" :job="syncJob" :loading="syncPageLoading" :starting="syncingFiles" :deleting="deletingLocalCsv" v-model:skip-today="syncSkipToday" :error="error" :message="importMessage" @refresh="loadSyncPageFiles" @start="startSyncJob" @delete="deleteSelectedLocalCsv">
+      <template #scope><div class="admin-server-picker"><AdminSelect :model-value="filters.serverId" :options="adminServerOptions" label="任务服务器" caption="服务器" @update:model-value="openSyncPage" /></div></template>
+    </FileSyncPage>
 
     <section v-else-if="currentView === 'importPage'" class="result-page">
       <div class="topbar">
@@ -4583,7 +4320,7 @@ function toggleAllImportFileSelection(checked) {
         <strong>{{ formatNumber(overview.placedCount) }}</strong>
       </article>
       <article class="metric-card">
-        <div class="metric-icon blue"><CalendarDays :size="20" /></div>
+        <div class="metric-icon blue"><UsersRound :size="20" /></div>
         <p>玩家数量</p>
         <strong>{{ formatNumber(overview.playerCount) }}</strong>
       </article>
@@ -4591,7 +4328,7 @@ function toggleAllImportFileSelection(checked) {
         <div class="metric-icon amber"><Database :size="20" /></div>
         <p>导入文件</p>
         <strong>{{ formatNumber(overview.importedFileCount) }}</strong>
-        <small>{{ formatDateTime(overview.lastImportedAt) }}</small>
+        <small v-if="overview.lastImportedAt">{{ formatDateTime(overview.lastImportedAt) }}</small>
       </article>
     </section>
 

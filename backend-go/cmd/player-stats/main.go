@@ -13,6 +13,7 @@ import (
 
 	"player-stats-backend-go/internal/auth"
 	"player-stats-backend-go/internal/config"
+	"player-stats-backend-go/internal/groupchat"
 	"player-stats-backend-go/internal/httpapi"
 	"player-stats-backend-go/internal/importer"
 	"player-stats-backend-go/internal/settings"
@@ -50,18 +51,25 @@ func main() {
 	statsService := stats.NewService(db, cfg)
 	importService := importer.NewService(db, cfg, settingsService)
 	importJobs := importer.NewJobService(importService)
+	defer importJobs.Close()
 	logQueryService := importer.NewLogQueryService(importService)
 	xrayService := importer.NewXrayAnalysisService(importService)
 	shareService := share.NewService(db, cfg, settingsService, statsService, xrayService, logQueryService)
+	chatCopyService := groupchat.NewCopyService(db, cfg, importService)
+	defer chatCopyService.Close()
+	chatQueryService := groupchat.NewQueryService(chatCopyService, cfg.Location)
+	defer chatQueryService.Close()
 	cleanupCtx, cleanupCancel := context.WithCancel(context.Background())
 	go runShareTokenCleanup(cleanupCtx, shareService, logger)
 	go importService.RunLiveLogSnapshotCleanup(cleanupCtx)
+	go groupchat.NewScheduler(chatCopyService, logger, cfg.Location).Run(cleanupCtx)
+	go chatQueryService.RunCleanup(cleanupCtx)
 	defer cleanupCancel()
 	autoScheduler := importer.NewAutoTaskScheduler(settingsService, importService, logger, cfg.Location)
 	autoScheduler.Start()
 	defer autoScheduler.Stop()
 
-	app := httpapi.NewServer(cfg, logger, authService, settingsService, shareService, importService, importJobs, logQueryService, xrayService, statsService)
+	app := httpapi.NewServer(cfg, logger, authService, settingsService, shareService, importService, importJobs, logQueryService, xrayService, statsService, chatCopyService, chatQueryService)
 	server := &http.Server{
 		Addr:              ":" + cfg.ServerPort,
 		Handler:           app.Handler(),
@@ -79,6 +87,11 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
+	chatQueryService.Close()
+	chatCopyService.Close()
+	importJobs.Close()
+	cleanupCancel()
+	autoScheduler.Stop()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

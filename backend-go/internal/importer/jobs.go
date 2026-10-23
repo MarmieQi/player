@@ -18,10 +18,15 @@ type JobService struct {
 	syncRunning bool
 	jobs        map[string]*jobState
 	syncJobs    map[string]*jobState
+	lifetime    context.Context
+	stop        context.CancelFunc
+	closed      bool
 }
 
 func NewJobService(importer *Service) *JobService {
+	lifetime, stop := context.WithCancel(context.Background())
 	return &JobService{
+		lifetime: lifetime, stop: stop,
 		importer: importer,
 		jobs:     map[string]*jobState{},
 		syncJobs: map[string]*jobState{},
@@ -30,6 +35,10 @@ func NewJobService(importer *Service) *JobService {
 
 func (s *JobService) StartImport(ctx context.Context, serverID string, skipToday bool) (ImportJobView, error) {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return ImportJobView{}, auth.NewHTTPError(503, "任务服务正在关闭")
+	}
 	if s.running {
 		s.mu.Unlock()
 		return ImportJobView{}, auth.NewHTTPError(409, "已有解析任务正在运行，请等待完成后再开始新的任务")
@@ -46,6 +55,12 @@ func (s *JobService) StartImport(ctx context.Context, serverID string, skipToday
 	}
 	state := newJobState(files)
 	s.mu.Lock()
+	if s.closed {
+		s.running = false
+		s.mu.Unlock()
+		return ImportJobView{}, auth.NewHTTPError(503, "任务服务正在关闭")
+	}
+	pruneJobHistory(s.jobs)
 	s.jobs[state.jobID] = state
 	s.mu.Unlock()
 
@@ -64,7 +79,24 @@ func (s *JobService) GetJob(jobID string) (ImportJobView, error) {
 }
 
 func (s *JobService) StartSync(ctx context.Context, serverID string, skipToday bool) (ImportJobView, error) {
+	return s.startCopy(func(ctx context.Context, listener ProgressListener) (ImportRunResult, error) {
+		return s.importer.SyncFilesFromConfiguredSource(ctx, serverID, skipToday, listener)
+	})
+}
+
+// StartArchiveCopy uses an isolated JobService instance for independent copy workflows.
+func (s *JobService) StartArchiveCopy(archive ArchiveCopySource, skipToday bool) (ImportJobView, error) {
+	return s.startCopy(func(ctx context.Context, listener ProgressListener) (ImportRunResult, error) {
+		return s.importer.CopySMBArchive(ctx, archive, skipToday, listener)
+	})
+}
+
+func (s *JobService) startCopy(operation func(context.Context, ProgressListener) (ImportRunResult, error)) (ImportJobView, error) {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return ImportJobView{}, auth.NewHTTPError(503, "任务服务正在关闭")
+	}
 	if s.syncRunning {
 		s.mu.Unlock()
 		return ImportJobView{}, auth.NewHTTPError(409, "已有复制任务正在运行，请等待完成后再开始新的任务")
@@ -74,10 +106,16 @@ func (s *JobService) StartSync(ctx context.Context, serverID string, skipToday b
 
 	state := newJobState(nil)
 	s.mu.Lock()
+	if s.closed {
+		s.syncRunning = false
+		s.mu.Unlock()
+		return ImportJobView{}, auth.NewHTTPError(503, "任务服务正在关闭")
+	}
+	pruneJobHistory(s.syncJobs)
 	s.syncJobs[state.jobID] = state
 	s.mu.Unlock()
 
-	go s.runSync(state, serverID, skipToday)
+	go s.runCopy(state, operation)
 	return state.view(), nil
 }
 
@@ -98,7 +136,12 @@ func (s *JobService) runImport(state *jobState, serverID string, skipToday bool)
 		s.running = false
 		s.mu.Unlock()
 	}()
-	result, err := s.importer.ImportFromConfiguredSource(context.Background(), serverID, skipToday, state)
+	ctx, cancel := context.WithTimeout(s.lifetime, 30*time.Minute)
+	defer cancel()
+	result, err := s.importer.ImportFromConfiguredSource(ctx, serverID, skipToday, state)
+	if err == nil {
+		err = ctx.Err()
+	}
 	if err != nil {
 		state.markFailed(err.Error())
 		return
@@ -106,19 +149,44 @@ func (s *JobService) runImport(state *jobState, serverID string, skipToday bool)
 	state.markFinished(result)
 }
 
-func (s *JobService) runSync(state *jobState, serverID string, skipToday bool) {
+func (s *JobService) runCopy(state *jobState, operation func(context.Context, ProgressListener) (ImportRunResult, error)) {
 	state.markRunning()
 	defer func() {
 		s.mu.Lock()
 		s.syncRunning = false
 		s.mu.Unlock()
 	}()
-	result, err := s.importer.SyncFilesFromConfiguredSource(context.Background(), serverID, skipToday, state)
+	ctx, cancel := context.WithTimeout(s.lifetime, 30*time.Minute)
+	defer cancel()
+	result, err := operation(ctx, state)
+	if err == nil {
+		err = ctx.Err()
+	}
 	if err != nil {
 		state.markFailed(err.Error())
 		return
 	}
 	state.markFinished(result)
+}
+
+func pruneJobHistory(jobs map[string]*jobState) {
+	if len(jobs) < 8 {
+		return
+	}
+	var oldest string
+	for id, previous := range jobs {
+		if oldest == "" || previous.startedAt.Before(jobs[oldest].startedAt) {
+			oldest = id
+		}
+	}
+	delete(jobs, oldest)
+}
+
+func (s *JobService) Close() {
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+	s.stop()
 }
 
 type jobState struct {
@@ -169,7 +237,7 @@ func (s *jobState) FileStarted(serverID, serverName string, file RemoteLogFile) 
 	})
 	now := time.Now().UTC()
 	item.status = "RUNNING"
-	item.message = "正在解析"
+	item.message = "正在处理文件"
 	item.startedAt = &now
 	item.finishedAt = nil
 }
@@ -316,4 +384,14 @@ func newJobID() string {
 		return hex.EncodeToString([]byte(time.Now().Format(time.RFC3339Nano)))
 	}
 	return hex.EncodeToString(bytes[:])
+}
+
+// WithCopyIdle serializes local archive management with new sync tasks.
+func (s *JobService) WithCopyIdle(operation func() error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.syncRunning {
+		return auth.NewHTTPError(409, "同步任务运行中，暂时不能删除本地文件")
+	}
+	return operation()
 }

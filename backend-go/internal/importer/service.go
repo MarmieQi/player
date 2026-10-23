@@ -27,6 +27,7 @@ type Service struct {
 	settings      *settings.Service
 	parser        parser
 	liveSnapshots *liveLogSnapshotCache
+	archives      archiveGate
 }
 
 type ProgressListener interface {
@@ -82,18 +83,28 @@ func (s *Service) ImportFromConfiguredSource(ctx context.Context, requestedServe
 	startedAt := time.Now().UTC()
 	files := make([]FileImportResult, 0)
 	for _, source := range s.selectedSources(ctx, requestedServerID) {
+		release, err := s.archives.acquire(ctx, source.ID)
+		if err != nil {
+			return summarizeRun(startedAt, files), err
+		}
 		localFiles, err := s.localFiles(source)
 		if err != nil {
+			release()
 			files = appendResult(files, listener, failedResult(source.ID, source.Name, source.Directory, err.Error()))
 			continue
 		}
 		for _, file := range limitFiles(localFiles, s.cfg.MaxFilesPerRun) {
+			if err := ctx.Err(); err != nil {
+				release()
+				return summarizeRun(startedAt, files), err
+			}
 			if listener != nil {
 				listener.FileStarted(source.ID, source.Name, file)
 			}
 			result := s.importOne(ctx, source, file, skipToday)
 			files = appendResult(files, listener, result)
 		}
+		release()
 	}
 	return summarizeRun(startedAt, files), nil
 }
@@ -223,6 +234,20 @@ func (s *Service) DeleteLocalFile(ctx context.Context, serverID, remotePath stri
 	if !ok {
 		return DeleteImportRecordResult{}, auth.NewHTTPError(404, "Server not found")
 	}
+	release, err := s.archives.acquire(ctx, source.ID)
+	if err != nil {
+		return DeleteImportRecordResult{}, err
+	}
+	defer release()
+	return deleteLocalArchiveFile(source, remotePath)
+}
+
+func deleteLocalArchiveFile(source config.Source, remotePath string) (DeleteImportRecordResult, error) {
+	serverID := source.ID
+	remotePath = strings.TrimSpace(remotePath)
+	if remotePath == "" {
+		return DeleteImportRecordResult{}, auth.NewHTTPError(400, "文件路径不能为空")
+	}
 	base, err := filepath.Abs(source.Directory)
 	if err != nil {
 		return DeleteImportRecordResult{}, err
@@ -232,26 +257,26 @@ func (s *Service) DeleteLocalFile(ctx context.Context, serverID, remotePath stri
 		return DeleteImportRecordResult{}, err
 	}
 	rel, err := filepath.Rel(base, target)
-	if err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
-		return DeleteImportRecordResult{}, auth.NewHTTPError(400, "只能删除当前服务器本地目录内的 CSV 文件")
+	if err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) || filepath.Dir(rel) != "." {
+		return DeleteImportRecordResult{}, auth.NewHTTPError(400, "只能删除当前同步目录内的文件")
 	}
 	if !matchesGlob(target, source.FileGlob) {
-		return DeleteImportRecordResult{}, auth.NewHTTPError(400, "只能删除匹配当前日志规则的 CSV 文件")
+		return DeleteImportRecordResult{}, auth.NewHTTPError(400, "只能删除匹配当前日志规则的文件")
 	}
-	info, err := os.Stat(target)
+	info, err := os.Lstat(target)
 	if errors.Is(err, os.ErrNotExist) {
-		return DeleteImportRecordResult{ServerID: serverID, RemotePath: remotePath, Deleted: false, Message: "Local CSV not found"}, nil
+		return DeleteImportRecordResult{ServerID: serverID, RemotePath: remotePath, Deleted: false, Message: "本地文件不存在"}, nil
 	}
 	if err != nil {
 		return DeleteImportRecordResult{}, err
 	}
-	if info.IsDir() {
-		return DeleteImportRecordResult{}, auth.NewHTTPError(400, "只能删除本地 CSV 文件")
+	if !info.Mode().IsRegular() {
+		return DeleteImportRecordResult{}, auth.NewHTTPError(400, "只能删除本地普通文件")
 	}
 	if err := os.Remove(target); err != nil {
 		return DeleteImportRecordResult{}, err
 	}
-	return DeleteImportRecordResult{ServerID: serverID, RemotePath: remotePath, Deleted: true, Message: "Local CSV deleted"}, nil
+	return DeleteImportRecordResult{ServerID: serverID, RemotePath: remotePath, Deleted: true, Message: "本地文件已删除"}, nil
 }
 
 func (s *Service) DeleteLocalFiles(ctx context.Context, request DeleteImportRecordsRequest) []DeleteImportRecordResult {
@@ -803,9 +828,10 @@ func (s *Service) hasImportedDetailRows(ctx context.Context, importFileID int64)
 	return count > 0, err
 }
 
+var logFileDatePattern = regexp.MustCompile(`.*?(\d{4}-\d{2}-\d{2}).*\.(?:csv|txt)$`)
+
 func extractLogDate(fileName string, location *time.Location) *time.Time {
-	re := regexp.MustCompile(`.*?(\d{4}-\d{2}-\d{2}).*\.csv$`)
-	match := re.FindStringSubmatch(fileName)
+	match := logFileDatePattern.FindStringSubmatch(fileName)
 	if len(match) < 2 {
 		return nil
 	}

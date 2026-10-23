@@ -32,7 +32,7 @@ func (s *Service) listRemoteSMBFiles(ctx context.Context, requestedServerID stri
 			if err != nil {
 				return err
 			}
-			files, err := listSMBFiles(share, sourceConfig.directory, "", false)
+			files, err := listSMBFiles(share, sourceConfig.directory, sourceConfig.fileGlob, sourceConfig.recursive)
 			if err != nil {
 				result = append(result, ImportFileStatus{
 					ServerID:     source.ID,
@@ -66,41 +66,10 @@ func (s *Service) syncFilesFromSMBSource(ctx context.Context, requestedServerID 
 			if err != nil {
 				return err
 			}
-			remoteFiles, err := listSMBFiles(share, sourceConfig.directory, sourceConfig.fileGlob, sourceConfig.recursive)
+			copied, err := s.copySMBSource(ctx, share, source, sourceConfig, skipToday, listener)
+			results = append(results, copied...)
 			if err != nil {
 				results = appendResult(results, listener, failedResult(source.ID, source.Name, sourceConfig.directory, err.Error()))
-				continue
-			}
-			archivedFiles := make([]RemoteLogFile, 0, len(remoteFiles))
-			for _, file := range remoteFiles {
-				archivedFiles = append(archivedFiles, toArchivedSMBFile(source, file))
-			}
-			sort.Slice(archivedFiles, func(i, j int) bool { return archivedFiles[i].Path < archivedFiles[j].Path })
-			for _, file := range limitFiles(archivedFiles, s.cfg.MaxFilesPerRun) {
-				if listener != nil {
-					listener.FileStarted(source.ID, source.Name, file)
-				}
-				logDate := extractLogDate(file.FileName, s.cfg.Location)
-				effectiveDate := logDate
-				if effectiveDate == nil {
-					value := dateOnly(file.LastModified.In(s.cfg.Location), s.cfg.Location)
-					effectiveDate = &value
-				}
-				today := dateOnly(time.Now().In(s.cfg.Location), s.cfg.Location)
-				if skipToday && !effectiveDate.Before(today) {
-					results = appendResult(results, listener, skippedResult(source.ID, source.Name, file.Path, "跳过当天或未来的日志文件"))
-					continue
-				}
-				copied, err := copySMBFileToArchive(share, file)
-				if err != nil {
-					results = appendResult(results, listener, failedResult(source.ID, source.Name, file.Path, err.Error()))
-					continue
-				}
-				if copied {
-					results = appendResult(results, listener, copiedResult(source.ID, source.Name, file.Path))
-				} else {
-					results = appendResult(results, listener, skippedResult(source.ID, source.Name, file.Path, "本地 CSV 文件未变化"))
-				}
 			}
 		}
 		return nil
@@ -258,10 +227,10 @@ func (s *Service) remoteFileStatus(source config.Source, remoteFile, archivedFil
 		message = "跳过当天或未来的日志文件"
 	} else if currentArchiveFile(archivedFile.Path, archivedFile) {
 		status = "COPIED"
-		message = "本地 CSV 文件未变化"
+		message = "本地文件未变化"
 	} else if archiveExists(archivedFile.Path) {
 		status = "CHANGED"
-		message = "远程文件与本地 CSV 不一致，可重新复制"
+		message = "远程文件与本地副本不一致，可重新复制"
 	}
 
 	return ImportFileStatus{
@@ -299,13 +268,13 @@ func copySMBFileToArchive(share *smb2.Share, file RemoteLogFile) (bool, error) {
 	}
 	defer remote.Close()
 
-	if err := writeArchiveFile(remote, localPath, file.LastModified); err != nil {
+	if err := writeArchiveFile(remote, localPath, file.LastModified, file.Size); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func writeArchiveFile(reader io.Reader, localPath string, lastModified time.Time) error {
+func writeArchiveFile(reader io.Reader, localPath string, lastModified time.Time, expectedSize ...int64) error {
 	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
 		return err
 	}
@@ -323,7 +292,13 @@ func writeArchiveFile(reader io.Reader, localPath string, lastModified time.Time
 		}
 	}()
 
-	_, copyErr := io.Copy(out, reader)
+	if len(expectedSize) > 0 {
+		reader = io.LimitReader(reader, expectedSize[0])
+	}
+	copied, copyErr := io.Copy(out, reader)
+	if copyErr == nil && len(expectedSize) > 0 && copied != expectedSize[0] {
+		copyErr = io.ErrUnexpectedEOF
+	}
 	closeErr := out.Close()
 	if copyErr != nil {
 		return copyErr
@@ -380,4 +355,133 @@ func joinSMBPath(directory, name string) string {
 		return name
 	}
 	return directory + "/" + name
+}
+
+// ArchiveCopySource describes raw file copying, independently of CSV parsing.
+type ArchiveCopySource struct {
+	Local           config.Source
+	RemoteDirectory string
+	FileGlob        string
+}
+
+func (s *Service) copySMBSource(ctx context.Context, share *smb2.Share, source config.Source, sourceConfig smbSourceSettings, skipToday bool, listener ProgressListener) ([]FileImportResult, error) {
+	release, err := s.archives.acquire(ctx, source.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	remoteFiles, err := listSMBFiles(share, sourceConfig.directory, sourceConfig.fileGlob, sourceConfig.recursive)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateArchiveNames(remoteFiles); err != nil {
+		return nil, err
+	}
+	return s.copyArchiveFiles(ctx, remoteFiles, source, skipToday, listener, func(file RemoteLogFile) (bool, error) { return copySMBFileToArchive(share, file) })
+}
+
+func validateArchiveNames(files []RemoteLogFile) error {
+	seen := map[string]bool{}
+	for _, file := range files {
+		name := file.FileName
+		if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\:\x00") {
+			return fmt.Errorf("无效的归档文件名：%q", name)
+		}
+		// Archives are flat; recursive directories must not overwrite each other.
+		key := name
+		if runtime.GOOS == "windows" {
+			key = strings.ToLower(key)
+		}
+		if seen[key] {
+			return fmt.Errorf("远端目录有重复文件名 %q，无法安全保存到同一归档目录", name)
+		}
+		seen[key] = true
+	}
+	return nil
+}
+
+// File-copy engine shared by CSV and TXT, with no knowledge of their contents.
+func (s *Service) copyArchiveFiles(ctx context.Context, remoteFiles []RemoteLogFile, source config.Source, skipToday bool, listener ProgressListener, copyFile func(RemoteLogFile) (bool, error)) ([]FileImportResult, error) {
+	results := make([]FileImportResult, 0)
+	archivedFiles := make([]RemoteLogFile, 0, len(remoteFiles))
+	for _, file := range remoteFiles {
+		archivedFiles = append(archivedFiles, toArchivedSMBFile(source, file))
+	}
+	sort.Slice(archivedFiles, func(i, j int) bool { return archivedFiles[i].Path < archivedFiles[j].Path })
+	for _, file := range limitFiles(archivedFiles, s.cfg.MaxFilesPerRun) {
+		if err := ctx.Err(); err != nil {
+			return results, err
+		}
+		if listener != nil {
+			listener.FileStarted(source.ID, source.Name, file)
+		}
+		logDate := extractLogDate(file.FileName, s.cfg.Location)
+		effectiveDate := logDate
+		if effectiveDate == nil {
+			value := dateOnly(file.LastModified.In(s.cfg.Location), s.cfg.Location)
+			effectiveDate = &value
+		}
+		today := dateOnly(time.Now().In(s.cfg.Location), s.cfg.Location)
+		if skipToday && !effectiveDate.Before(today) {
+			results = appendResult(results, listener, skippedResult(source.ID, source.Name, file.Path, "跳过当天或未来的日志文件"))
+			continue
+		}
+		copied, err := copyFile(file)
+		if err != nil {
+			results = appendResult(results, listener, failedResult(source.ID, source.Name, file.Path, err.Error()))
+			continue
+		}
+		if copied {
+			results = appendResult(results, listener, copiedResult(source.ID, source.Name, file.Path))
+		} else {
+			results = appendResult(results, listener, skippedResult(source.ID, source.Name, file.Path, "本地文件未变化"))
+		}
+	}
+	return results, nil
+}
+
+func (s *Service) CopySMBArchive(ctx context.Context, archive ArchiveCopySource, skipToday bool, listener ProgressListener) (ImportRunResult, error) {
+	started := time.Now().UTC()
+	var results []FileImportResult
+	err := s.withSMBShare(ctx, func(share *smb2.Share) error {
+		var err error
+		results, err = s.copySMBSource(ctx, share, archive.Local, smbSourceSettings{directory: normalizeSMBPath(archive.RemoteDirectory), fileGlob: archive.FileGlob}, skipToday, listener)
+		return err
+	})
+	if err != nil {
+		return ImportRunResult{}, err
+	}
+	return summarizeRun(started, results), nil
+}
+
+func (s *Service) ListSMBArchive(ctx context.Context, archive ArchiveCopySource, skipToday bool) ([]ImportFileStatus, error) {
+	result := make([]ImportFileStatus, 0)
+	err := s.withSMBShare(ctx, func(share *smb2.Share) error {
+		files, err := listSMBFiles(share, archive.RemoteDirectory, archive.FileGlob, false)
+		if err != nil {
+			return err
+		}
+		for _, file := range limitFiles(files, s.cfg.MaxFilesPerRun) {
+			item := s.remoteFileStatus(archive.Local, file, toArchivedSMBFile(archive.Local, file), skipToday)
+			result = append(result, item)
+		}
+		return nil
+	})
+	return result, err
+}
+
+// ListLocalSMBArchive returns raw local metadata; no import-record lookup occurs.
+func (s *Service) ListLocalSMBArchive(archive ArchiveCopySource) ([]ImportFileStatus, error) {
+	files, err := s.localFiles(archive.Local)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]ImportFileStatus, 0, len(files))
+	for _, file := range files {
+		result = append(result, ImportFileStatus{ServerID: archive.Local.ID, ServerName: archive.Local.Name, RemotePath: file.Path, FileName: file.FileName, FileSize: file.Size, LastModified: file.LastModified, Status: "COPIED"})
+	}
+	return result, nil
+}
+func (s *Service) DeleteSMBArchiveFile(archive ArchiveCopySource, remotePath string) (DeleteImportRecordResult, error) {
+	return deleteLocalArchiveFile(archive.Local, remotePath)
 }

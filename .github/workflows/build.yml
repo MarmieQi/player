@@ -18,6 +18,21 @@ jobs:
   go-backend:
     name: Go backend
     runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci-only-test-password
+          MYSQL_DATABASE: player_stats_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -pci-only-test-password"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      PLAYER_TEST_MYSQL_DSN: root:ci-only-test-password@tcp(127.0.0.1:3306)/player_stats_test?parseTime=true&charset=utf8mb4
     defaults:
       run:
         working-directory: backend-go
@@ -36,6 +51,11 @@ jobs:
 
       - name: Vet
         run: go vet ./...
+
+      - name: Race checks
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race ./internal/importer ./internal/groupchat
 
       - name: Build
         run: go build -trimpath -o player-stats-backend ./cmd/player-stats

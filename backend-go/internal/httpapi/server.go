@@ -7,6 +7,7 @@ import (
 
 	"player-stats-backend-go/internal/auth"
 	"player-stats-backend-go/internal/config"
+	"player-stats-backend-go/internal/groupchat"
 	"player-stats-backend-go/internal/importer"
 	"player-stats-backend-go/internal/settings"
 	"player-stats-backend-go/internal/share"
@@ -14,6 +15,8 @@ import (
 )
 
 type Server struct {
+	groupChatCopy   *groupchat.CopyService
+	groupChatQuery  *groupchat.QueryService
 	cfg             config.Config
 	logger          *slog.Logger
 	authService     *auth.Service
@@ -27,8 +30,10 @@ type Server struct {
 	mux             *http.ServeMux
 }
 
-func NewServer(cfg config.Config, logger *slog.Logger, authService *auth.Service, settingsService *settings.Service, shareService *share.Service, importService *importer.Service, importJobs *importer.JobService, logQueryService *importer.LogQueryService, xrayService *importer.XrayAnalysisService, statsService *stats.Service) *Server {
+func NewServer(cfg config.Config, logger *slog.Logger, authService *auth.Service, settingsService *settings.Service, shareService *share.Service, importService *importer.Service, importJobs *importer.JobService, logQueryService *importer.LogQueryService, xrayService *importer.XrayAnalysisService, statsService *stats.Service, groupChatCopy *groupchat.CopyService, groupChatQuery *groupchat.QueryService) *Server {
 	server := &Server{
+		groupChatCopy:   groupChatCopy,
+		groupChatQuery:  groupChatQuery,
 		cfg:             cfg,
 		logger:          logger,
 		authService:     authService,
@@ -50,6 +55,18 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) routes() {
+	s.mux.HandleFunc("POST /api/admin/group-chat/query", s.queryGroupChat)
+	s.mux.HandleFunc("GET /api/admin/group-chat/query/{snapshotId}", s.groupChatQueryPage)
+	s.mux.HandleFunc("GET /api/admin/group-chat/copy-schedule", s.groupChatSchedule)
+	s.mux.HandleFunc("PUT /api/admin/group-chat/copy-schedule", s.saveGroupChatSchedule)
+	s.mux.HandleFunc("GET /api/admin/group-chat/local-files", s.groupChatLocalFiles)
+	s.mux.HandleFunc("POST /api/admin/group-chat/local-files/delete", s.deleteGroupChatLocalFiles)
+	s.mux.HandleFunc("GET /api/admin/group-chat/config", s.groupChatConfig)
+	s.mux.HandleFunc("PUT /api/admin/group-chat/config", s.saveGroupChatConfig)
+	s.mux.HandleFunc("GET /api/admin/group-chat/files", s.groupChatFiles)
+	s.mux.HandleFunc("GET /api/admin/group-chat/directory-files", s.groupChatDirectoryFiles)
+	s.mux.HandleFunc("POST /api/admin/group-chat/copy-jobs", s.startGroupChatCopy)
+	s.mux.HandleFunc("GET /api/admin/group-chat/copy-jobs/{jobId}", s.groupChatCopyJob)
 	s.mux.HandleFunc("GET /api/health", s.health)
 	s.mux.HandleFunc("GET /api/stats/server-time", s.serverTime)
 

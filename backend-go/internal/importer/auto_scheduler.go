@@ -15,15 +15,21 @@ type AutoTaskScheduler struct {
 	logger   *slog.Logger
 	location *time.Location
 
-	mu      sync.Mutex
-	lastRun map[string]string
-	running map[string]bool
-	stop    chan struct{}
-	done    chan struct{}
+	mu       sync.Mutex
+	lastRun  map[string]string
+	running  map[string]bool
+	stop     chan struct{}
+	done     chan struct{}
+	lifetime context.Context
+	cancel   context.CancelFunc
+	stopOnce sync.Once
+	workers  sync.WaitGroup
 }
 
 func NewAutoTaskScheduler(settingsService *settings.Service, importService *Service, logger *slog.Logger, location *time.Location) *AutoTaskScheduler {
+	lifetime, cancel := context.WithCancel(context.Background())
 	return &AutoTaskScheduler{
+		lifetime: lifetime, cancel: cancel,
 		settings: settingsService,
 		importer: importService,
 		logger:   logger,
@@ -40,8 +46,9 @@ func (s *AutoTaskScheduler) Start() {
 }
 
 func (s *AutoTaskScheduler) Stop() {
-	close(s.stop)
+	s.stopOnce.Do(func() { s.cancel(); close(s.stop) })
 	<-s.done
+	s.workers.Wait()
 }
 
 func (s *AutoTaskScheduler) loop() {
@@ -62,7 +69,9 @@ func (s *AutoTaskScheduler) loop() {
 }
 
 func (s *AutoTaskScheduler) check(now time.Time) {
-	cfg, err := s.settings.GetSyncConfig(context.Background())
+	ctx, cancel := context.WithTimeout(s.lifetime, 5*time.Second)
+	defer cancel()
+	cfg, err := s.settings.GetSyncConfig(ctx)
 	if err != nil {
 		s.logger.Warn("auto task config load failed", "error", err)
 		return
@@ -86,6 +95,11 @@ func (s *AutoTaskScheduler) launch(date string, task settings.AutoTaskSetting, k
 	}
 	key := date + "|" + task.ServerID + "|" + kind + "|" + scheduledTime
 	s.mu.Lock()
+	for previous := range s.lastRun {
+		if len(previous) >= 10 && previous[:10] != date {
+			delete(s.lastRun, previous)
+		}
+	}
 	if s.lastRun[key] == scheduledTime || s.running[key] {
 		s.mu.Unlock()
 		return
@@ -94,7 +108,9 @@ func (s *AutoTaskScheduler) launch(date string, task settings.AutoTaskSetting, k
 	s.lastRun[key] = scheduledTime
 	s.mu.Unlock()
 
+	s.workers.Add(1)
 	go func() {
+		defer s.workers.Done()
 		defer func() {
 			s.mu.Lock()
 			delete(s.running, key)
@@ -110,7 +126,8 @@ func (s *AutoTaskScheduler) launch(date string, task settings.AutoTaskSetting, k
 
 func (s *AutoTaskScheduler) runSync(task settings.AutoTaskSetting, skipToday bool) {
 	label := task.ServerName + "：自动复制 CSV"
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(s.lifetime, 30*time.Minute)
+	defer cancel()
 	s.recordTask(ctx, task.ServerID, task.ServerName, "SYNC", label, "RUNNING", label+" 开始", nil)
 	result, err := s.importer.SyncFilesFromConfiguredSource(ctx, task.ServerID, skipToday, nil)
 	if err != nil {
@@ -128,7 +145,8 @@ func (s *AutoTaskScheduler) runSync(task settings.AutoTaskSetting, skipToday boo
 
 func (s *AutoTaskScheduler) runImport(task settings.AutoTaskSetting, skipToday bool) {
 	label := task.ServerName + "：自动解析入库"
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(s.lifetime, 30*time.Minute)
+	defer cancel()
 	s.recordTask(ctx, task.ServerID, task.ServerName, "IMPORT", label, "RUNNING", label+" 开始", nil)
 	result, err := s.importer.ImportFromConfiguredSource(ctx, task.ServerID, skipToday, nil)
 	if err != nil {
@@ -149,6 +167,8 @@ func (s *AutoTaskScheduler) recordConfig(ctx context.Context, message string) {
 }
 
 func (s *AutoTaskScheduler) recordTask(ctx context.Context, serverID, serverName, taskType, label, status, message string, result *ImportRunResult) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	var details string
 	scanned, success, skipped, failed := 0, 0, 0, 0
 	if result != nil {

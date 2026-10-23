@@ -11,7 +11,18 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 			return err
 		}
 	}
-	if err := dropSyncConfigColumn(ctx, db, "log_query_hourly_limit"); err != nil {
+	for _, column := range []struct{ name, definition string }{
+		{"auto_enabled", "BOOLEAN NOT NULL DEFAULT FALSE"},
+		{"auto_time", "VARCHAR(5) NOT NULL DEFAULT '00:10'"},
+	} {
+		if _, err := ensureTableColumn(ctx, db, "group_chat_copy_config", column.name, column.definition); err != nil {
+			return err
+		}
+	}
+	if err := dropTableColumn(ctx, db, "group_chat_copy_config", "auto_skip_today"); err != nil {
+		return err
+	}
+	if err := dropTableColumn(ctx, db, "sync_config", "log_query_hourly_limit"); err != nil {
 		return err
 	}
 	added, err := ensureSyncConfigColumn(ctx, db, "log_query_share_ttl_minutes", "INT NOT NULL DEFAULT 60")
@@ -24,37 +35,50 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	return err
 }
 
-func dropSyncConfigColumn(ctx context.Context, db *sql.DB, columnName string) error {
+func dropTableColumn(ctx context.Context, db *sql.DB, tableName, columnName string) error {
 	var count int
 	if err := db.QueryRowContext(ctx, `
 		select count(*) from information_schema.columns
-		where table_schema = database() and table_name = 'sync_config' and column_name = ?
-	`, columnName).Scan(&count); err != nil {
+		where table_schema = database() and table_name = ? and column_name = ?
+	`, tableName, columnName).Scan(&count); err != nil {
 		return err
 	}
 	if count == 0 {
 		return nil
 	}
-	_, err := db.ExecContext(ctx, "alter table sync_config drop column "+columnName)
+	_, err := db.ExecContext(ctx, "alter table "+tableName+" drop column "+columnName)
 	return err
 }
 
 func ensureSyncConfigColumn(ctx context.Context, db *sql.DB, columnName, definition string) (bool, error) {
+	return ensureTableColumn(ctx, db, "sync_config", columnName, definition)
+}
+
+func ensureTableColumn(ctx context.Context, db *sql.DB, tableName, columnName, definition string) (bool, error) {
 	var count int
 	if err := db.QueryRowContext(ctx, `
 		select count(*) from information_schema.columns
-		where table_schema = database() and table_name = 'sync_config' and column_name = ?
-	`, columnName).Scan(&count); err != nil {
+		where table_schema = database() and table_name = ? and column_name = ?
+	`, tableName, columnName).Scan(&count); err != nil {
 		return false, err
 	}
 	if count > 0 {
 		return false, nil
 	}
-	_, err := db.ExecContext(ctx, "alter table sync_config add column "+columnName+" "+definition)
+	_, err := db.ExecContext(ctx, "alter table "+tableName+" add column "+columnName+" "+definition)
 	return err == nil, err
 }
 
 var schemaStatements = []string{
+	`CREATE TABLE IF NOT EXISTS group_chat_copy_config (
+  id INT NOT NULL PRIMARY KEY,
+  enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  smb_directory VARCHAR(1024) NOT NULL DEFAULT '',
+  file_glob VARCHAR(128) NOT NULL DEFAULT '*.txt',
+  auto_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  auto_time VARCHAR(5) NOT NULL DEFAULT '00:10'
+ ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+	`INSERT IGNORE INTO group_chat_copy_config (id) VALUES (1)`,
 	`CREATE TABLE IF NOT EXISTS admin_users (
 		id BIGINT NOT NULL AUTO_INCREMENT,
 		username VARCHAR(64) NOT NULL,

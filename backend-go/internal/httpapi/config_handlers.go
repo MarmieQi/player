@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 
 	"player-stats-backend-go/internal/settings"
@@ -49,28 +48,19 @@ func (s *Server) smbTest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) sourceFiles(w http.ResponseWriter, r *http.Request) {
-	statuses, err := s.importService.ListRemoteSMBFiles(r.Context(), r.URL.Query().Get("sourceId"))
+	metadata, err := s.importService.ListSourceDirectoryFiles(r.Context(), r.URL.Query().Get("sourceId"))
 	if err == nil {
-		files := make([]settings.RemoteLogFile, 0, len(statuses))
-		for _, status := range statuses {
-			if status.Status == "FAILED" {
-				err = errors.New(status.Message)
-				break
-			}
+		files := make([]settings.RemoteLogFile, 0, len(metadata))
+		for _, status := range metadata {
 			files = append(files, settings.RemoteLogFile{
 				FileName:     status.FileName,
-				Path:         status.RemotePath,
-				Size:         status.FileSize,
+				Path:         status.Path,
+				Size:         status.Size,
 				LastModified: status.LastModified,
 			})
 		}
-		if err == nil {
-			writeJSON(w, http.StatusOK, map[string]any{
-				"success": true,
-				"files":   files,
-			})
-			return
-		}
+		writeJSON(w, http.StatusOK, map[string]any{"success": true, "files": files})
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success": false,

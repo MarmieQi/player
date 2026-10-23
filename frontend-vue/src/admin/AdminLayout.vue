@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { Activity, ArrowDownToLine, Database, LayoutDashboard, Menu, Search, Settings, ShieldCheck, X } from 'lucide-vue-next'
+import { Activity, ArrowDownToLine, Database, LayoutDashboard, Menu, MessageSquare, Search, Settings, ShieldCheck, X } from 'lucide-vue-next'
 import { adminNavigation, adminPage } from './navigation'
 import AdminAccountMenu from './AdminAccountMenu.vue'
 import './admin-theme.css'
@@ -8,7 +8,7 @@ import './admin.css'
 
 const props = defineProps({ active: { type: String, required: true }, account: String, serverTime: String })
 const emit = defineEmits(['navigate', 'logout'])
-const icons = { overview: LayoutDashboard, search: Search, analysis: Activity, sync: ArrowDownToLine, database: Database, settings: Settings }
+const icons = { overview: LayoutDashboard, chat: MessageSquare, search: Search, analysis: Activity, sync: ArrowDownToLine, database: Database, settings: Settings }
 const page = computed(() => adminPage(props.active))
 const collapsed = ref(false)
 const mobile = ref(false)

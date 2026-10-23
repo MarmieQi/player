@@ -2,11 +2,13 @@
 export const adminNavigation = [
   { label: '数据查看', items: [
     { id: 'dashboard', label: '统计总览', icon: 'overview', description: '服务器行为统计与玩家活跃情况' },
+    { id: 'groupChat', label: '群服聊天', icon: 'chat', description: '按玩家和关键字查询聊天日志' },
     { id: 'logs', label: '日志查询', icon: 'search', description: '按坐标、玩家和关键词追溯行为记录' },
     { id: 'xray', label: '矿透分析', icon: 'analysis', description: '分析挖矿行为，查看风险与证据' }
   ] },
   { label: '系统管理', items: [
     { id: 'sync', label: 'CSV 同步', icon: 'sync', description: '从远程服务器复制日志文件' },
+    { id: 'txtCopy', label: 'TXT 同步', icon: 'sync', description: '同步群服聊天原始 TXT 文件' },
     { id: 'import', label: '解析入库', icon: 'database', description: '管理 CSV 解析与导入任务' },
     { id: 'settings', label: '系统设置', icon: 'settings', description: '管理数据源、自动任务与接口配置' }
   ] }
@@ -19,6 +21,7 @@ export function adminPage(id) {
 }
 
 export function adminNavigationId(view) {
-  const pages = { dashboard: 'dashboard', logQueryPage: 'logs', xrayAnalysisPage: 'xray', settingsPage: 'settings', syncPage: 'sync', importPage: 'import', profilePage: 'profile', xrayDetailPage: 'xray' }
+  const pages = { dashboard: 'dashboard', logQueryPage: 'logs', xrayAnalysisPage: 'xray', settingsPage: 'settings', syncPage: 'sync', txtCopyPage: 'txtCopy', importPage: 'import', profilePage: 'profile', xrayDetailPage: 'xray' }
+  if (view === 'groupChatPage') return 'groupChat'
   return pages[view] || 'dashboard'
 }

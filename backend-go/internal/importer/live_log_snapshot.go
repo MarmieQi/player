@@ -51,8 +51,10 @@ type liveLogSnapshotEntry struct {
 }
 
 type liveLogSnapshotFlight struct {
-	done chan struct{}
-	err  error
+	done   chan struct{}
+	err    error
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 type liveLogSnapshotLease struct {
@@ -140,6 +142,9 @@ func (c *liveLogSnapshotCache) close() {
 	remove := make([]RemoteLogFile, 0)
 	c.mu.Lock()
 	c.closed = true
+	for _, flight := range c.refreshing {
+		flight.cancel()
+	}
 	for key, entry := range c.entries {
 		delete(c.entries, key)
 		remove = append(remove, c.retireLocked(entry)...)
@@ -184,7 +189,8 @@ func (c *liveLogSnapshotCache) acquire(
 		}
 		flight := c.refreshing[key]
 		if flight == nil {
-			flight = &liveLogSnapshotFlight{done: make(chan struct{})}
+			refreshCtx, cancel := context.WithTimeout(context.Background(), liveLogSnapshotReadTimeout)
+			flight = &liveLogSnapshotFlight{done: make(chan struct{}), ctx: refreshCtx, cancel: cancel}
 			c.refreshing[key] = flight
 			// Refresh belongs to the shared cache, not the first querying task.
 			go c.refresh(key, day, flight, create)
@@ -202,8 +208,8 @@ func (c *liveLogSnapshotCache) acquire(
 }
 
 func (c *liveLogSnapshotCache) refresh(key, day string, flight *liveLogSnapshotFlight, create func(context.Context) ([]RemoteLogFile, error)) {
-	ctx, cancel := context.WithTimeout(context.Background(), liveLogSnapshotReadTimeout)
-	defer cancel()
+	ctx := flight.ctx
+	defer flight.cancel()
 	files, err := create(ctx)
 	if err == nil {
 		err = ctx.Err()
@@ -229,6 +235,9 @@ func (c *liveLogSnapshotCache) refresh(key, day string, flight *liveLogSnapshotF
 		for _, file := range entry.files {
 			c.owned[filepath.Clean(file.Path)] = entry
 		}
+	} else {
+		// Even a failed or timed-out creator may have produced temporary files.
+		remove = append(remove, files...)
 	}
 	flight.err = err
 	close(flight.done)
@@ -345,6 +354,10 @@ func snapshotRemoteLogFile(share *smb2.Share, remoteFile RemoteLogFile, root, se
 // Bytes appended remotely after listing belong to the next snapshot. A final
 // record without a newline is discarded because the writer may still own it.
 func writeLiveLogSnapshot(reader io.Reader, size int64, root, serverID string) (string, int64, error) {
+	return writeLiveSnapshot(reader, size, root, serverID, true)
+}
+
+func writeLiveSnapshot(reader io.Reader, size int64, root, serverID string, csv bool) (string, int64, error) {
 	prefix := liveLogSnapshotPrefix + safeLiveLogName(serverID) + "-"
 	temporary, err := os.CreateTemp(root, prefix+"*"+liveLogSnapshotPartSuffix)
 	if err != nil {
@@ -362,11 +375,13 @@ func writeLiveLogSnapshot(reader io.Reader, size int64, root, serverID string) (
 	if _, err := io.CopyN(temporary, reader, size); err != nil {
 		return "", 0, fmt.Errorf("读取固定长度日志内容失败: %w", err)
 	}
-	if err := trimIncompleteLogTail(temporary); err != nil {
+	if err := trimSnapshotTail(temporary, !csv); err != nil {
 		return "", 0, fmt.Errorf("整理当天日志临时快照失败: %w", err)
 	}
-	if err := validateLogSnapshotHeader(temporary); err != nil {
-		return "", 0, fmt.Errorf("验证当天日志临时快照失败: %w", err)
+	if csv {
+		if err := validateLogSnapshotHeader(temporary); err != nil {
+			return "", 0, fmt.Errorf("验证当天日志临时快照失败: %w", err)
+		}
 	}
 	if err := temporary.Close(); err != nil {
 		return "", 0, fmt.Errorf("关闭当天日志临时快照失败: %w", err)
@@ -385,11 +400,18 @@ func writeLiveLogSnapshot(reader io.Reader, size int64, root, serverID string) (
 }
 
 func trimIncompleteLogTail(file *os.File) error {
+	return trimSnapshotTail(file, false)
+}
+
+func trimSnapshotTail(file *os.File, allowEmpty bool) error {
 	info, err := file.Stat()
 	if err != nil {
 		return err
 	}
 	if info.Size() == 0 {
+		if allowEmpty {
+			return nil
+		}
 		return errors.New("日志快照为空")
 	}
 	const chunkSize int64 = 4096
@@ -406,6 +428,9 @@ func trimIncompleteLogTail(file *os.File) error {
 				return file.Truncate(cursor + int64(index) + 1)
 			}
 		}
+	}
+	if allowEmpty {
+		return file.Truncate(0)
 	}
 	return errors.New("日志快照中没有完整记录")
 }
