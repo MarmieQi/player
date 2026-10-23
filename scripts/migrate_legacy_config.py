@@ -19,6 +19,11 @@ RETIRED = {
     "PLAYER_LOGS_LOCAL_DIRECTORY", "PLAYER_LOGS_SMB_ENABLED",
 }
 REQUIRED = {"MYSQL_PASSWORD", "MYSQL_ROOT_PASSWORD", "APP_ADMIN_PASSWORD", "APP_ADMIN_JWT_SECRET"}
+# Defaults of the Go backend in the original Linux/Alpine container when unset.
+LEGACY_LIVE_DEFAULTS = {
+    "PLAYER_LOGS_LIVE_CACHE_SECONDS": "120",
+    "PLAYER_LOGS_LIVE_TEMP_DIRECTORY": "/tmp/player-stats-live-log-query",
+}
 
 
 class MigrationError(Exception):
@@ -80,6 +85,9 @@ def extract(old):
             raise MigrationError(f"{key} 仍引用外部变量，请先将旧配置中的该项解析为实际值，再迁移。")
     defaults = dict(re.findall(r"^([A-Z][A-Z0-9_]*)=(.*)$", EXAMPLE.read_text(encoding="utf-8"), re.M))
     values = defaults | {key: text(value) for key, value in backend.items() if key in defaults}
+    for key, default in LEGACY_LIVE_DEFAULTS.items():
+        if key not in backend:
+            values[key] = default
     for key in ["MYSQL_DATABASE", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_ROOT_PASSWORD"]:
         if key not in database:
             raise MigrationError(f"旧配置缺少 {key}，请补充原值后再迁移。")
@@ -174,6 +182,8 @@ def verify_equivalent(old, new):
         backend.pop(key, None)
     # Current Go MySQLDSN ignores legacy JDBC query options; host, credentials and DB were checked above.
     backend["PLAYER_STATS_DATASOURCE_URL"] = new["services"]["backend"]["environment"]["PLAYER_STATS_DATASOURCE_URL"]
+    for key, default in LEGACY_LIVE_DEFAULTS.items():
+        backend.setdefault(key, default)
     # Newly explicit parameters retain the existing Go defaults when absent from old Compose.
     added_defaults = {"PLAYER_LOGS_XRAY_ANALYSIS_RETAINED_JOBS", "APP_CORS_ALLOWED_ORIGINS", "APP_CORS_ALLOWED_ORIGIN_PATTERNS"}
     for key in added_defaults:

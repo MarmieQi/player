@@ -71,7 +71,7 @@ services:
       # 矿透分析过程文件。任务完成后自动清理，避免长时间分析占满容器内存。
       PLAYER_LOGS_XRAY_TEMP_DIRECTORY: /data/temp/xray
       # 当天日志只读查询快照。不会进入正式归档，默认复用 120 秒并自动清理。
-      PLAYER_LOGS_LIVE_TEMP_DIRECTORY: /data/temp/live-log-query
+      PLAYER_LOGS_LIVE_TEMP_DIRECTORY: ${PLAYER_LOGS_LIVE_TEMP_DIRECTORY:-/data/temp/live-log-query}
       PLAYER_LOGS_LIVE_CACHE_SECONDS: ${PLAYER_LOGS_LIVE_CACHE_SECONDS:-120}
       PLAYER_LOGS_XRAY_ANALYSIS_RETAINED_JOBS: ${PLAYER_LOGS_XRAY_ANALYSIS_RETAINED_JOBS:-1}
       APP_CORS_ALLOWED_ORIGINS: ${APP_CORS_ALLOWED_ORIGINS:-http://localhost:5173}

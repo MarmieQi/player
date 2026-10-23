@@ -37,6 +37,27 @@ class MigrationTests(unittest.TestCase):
                 self.assertEqual(output.stat().st_mode & 0o777, 0o600)
         self.run_fixture(FIXTURE, check)
 
+    def test_older_compose_without_live_settings_retains_runtime_defaults(self):
+        fixture = "\n".join(line for line in FIXTURE.splitlines() if "PLAYER_LOGS_LIVE_" not in line)
+        def check(root, old):
+            output = root / "migrated.env"
+            migration.migrate(old, output)
+            actual = migration.model(migration.COMPOSE, root, output)["services"]["backend"]["environment"]
+            for key, default in migration.LEGACY_LIVE_DEFAULTS.items():
+                self.assertEqual(actual[key], default)
+        self.run_fixture(fixture, check)
+
+    def test_explicit_live_cache_and_directory_are_not_replaced(self):
+        fixture = FIXTURE.replace("PLAYER_LOGS_LIVE_TEMP_DIRECTORY: /data/temp/live-log-query", "PLAYER_LOGS_LIVE_TEMP_DIRECTORY: /data/temp/custom-live")
+        fixture = fixture.replace("PLAYER_LOGS_LIVE_CACHE_SECONDS: 120", "PLAYER_LOGS_LIVE_CACHE_SECONDS: 75")
+        def check(root, old):
+            output = root / "migrated.env"
+            migration.migrate(old, output)
+            actual = migration.model(migration.COMPOSE, root, output)["services"]["backend"]["environment"]
+            self.assertEqual(actual["PLAYER_LOGS_LIVE_CACHE_SECONDS"], "75")
+            self.assertEqual(actual["PLAYER_LOGS_LIVE_TEMP_DIRECTORY"], "/data/temp/custom-live")
+        self.run_fixture(fixture, check)
+
     def test_does_not_overwrite_existing_output(self):
         def check(root, old):
             output = root / ".env"
