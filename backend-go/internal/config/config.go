@@ -34,22 +34,11 @@ type Config struct {
 	SubFileGlob               string
 	MainEnabled               bool
 	SubEnabled                bool
-	SkipToday                 bool
 	MaxFilesPerRun            int
 	XrayRetainedJobs          int
 	XrayTempDirectory         string
 	LiveLogSnapshotDirectory  string
 	LiveLogSnapshotTTLSeconds int
-
-	SMBHost      string
-	SMBPort      int
-	SMBDomain    string
-	SMBUsername  string
-	SMBPassword  string
-	SMBShare     string
-	SMBDirectory string
-	SMBFileGlob  string
-	SMBRecursive bool
 }
 
 func Load() Config {
@@ -85,22 +74,11 @@ func Load() Config {
 		SubFileGlob:               env("PLAYER_LOGS_SUB_FILE_GLOB", "player_actions_*.csv"),
 		MainEnabled:               boolEnv("PLAYER_LOGS_MAIN_ENABLED", true),
 		SubEnabled:                boolEnv("PLAYER_LOGS_SUB_ENABLED", true),
-		SkipToday:                 boolEnv("PLAYER_LOGS_IMPORTER_SKIP_TODAY", true),
 		MaxFilesPerRun:            intEnv("PLAYER_LOGS_IMPORTER_MAX_FILES_PER_RUN", 1000),
 		XrayRetainedJobs:          intEnv("PLAYER_LOGS_XRAY_ANALYSIS_RETAINED_JOBS", 1),
 		XrayTempDirectory:         env("PLAYER_LOGS_XRAY_TEMP_DIRECTORY", filepath.Join(os.TempDir(), "player-stats-xray")),
 		LiveLogSnapshotDirectory:  env("PLAYER_LOGS_LIVE_TEMP_DIRECTORY", filepath.Join(os.TempDir(), "player-stats-live-log-query")),
 		LiveLogSnapshotTTLSeconds: intEnv("PLAYER_LOGS_LIVE_CACHE_SECONDS", 120),
-
-		SMBHost:      env("PLAYER_LOGS_SMB_HOST", ""),
-		SMBPort:      intEnv("PLAYER_LOGS_SMB_PORT", 445),
-		SMBDomain:    env("PLAYER_LOGS_SMB_DOMAIN", ""),
-		SMBUsername:  env("PLAYER_LOGS_SMB_USERNAME", ""),
-		SMBPassword:  env("PLAYER_LOGS_SMB_PASSWORD", ""),
-		SMBShare:     env("PLAYER_LOGS_SMB_SHARE", ""),
-		SMBDirectory: env("PLAYER_LOGS_SMB_DIRECTORY", ""),
-		SMBFileGlob:  env("PLAYER_LOGS_SMB_FILE_GLOB", "player_actions_*.csv"),
-		SMBRecursive: boolEnv("PLAYER_LOGS_SMB_RECURSIVE", false),
 	}
 }
 

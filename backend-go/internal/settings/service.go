@@ -168,6 +168,13 @@ func (s *Service) LogQueryShareTTLMinutes(ctx context.Context) int {
 	return NormalizeShareTTL(minutes)
 }
 
+// SkipToday returns the business setting once per file-list operation.
+func (s *Service) SkipToday(ctx context.Context) (bool, error) {
+	var skip bool
+	err := s.db.QueryRowContext(ctx, `select skip_today from sync_config where id = 1`).Scan(&skip)
+	return skip, err
+}
+
 func (s *Service) SMBConnectionConfig(ctx context.Context) (SMBConnectionConfig, error) {
 	cfg, err := s.readSyncConfig(ctx)
 	if err != nil {

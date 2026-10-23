@@ -45,6 +45,10 @@ func NewService(db *sql.DB, cfg config.Config, settingsService *settings.Service
 }
 
 func (s *Service) ListLocalImportFiles(ctx context.Context, requestedServerID string) ([]ImportFileStatus, error) {
+	skipToday, err := s.settings.SkipToday(ctx)
+	if err != nil {
+		return nil, err
+	}
 	result := make([]ImportFileStatus, 0)
 	for _, source := range s.selectedSources(ctx, requestedServerID) {
 		files, err := s.localFiles(source)
@@ -60,7 +64,7 @@ func (s *Service) ListLocalImportFiles(ctx context.Context, requestedServerID st
 			continue
 		}
 		for _, file := range limitFiles(files, s.cfg.MaxFilesPerRun) {
-			status, err := s.importFileStatus(ctx, source, file, s.cfg.SkipToday)
+			status, err := s.importFileStatus(ctx, source, file, skipToday)
 			if err != nil {
 				return nil, err
 			}

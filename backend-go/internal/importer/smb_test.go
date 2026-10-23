@@ -13,7 +13,7 @@ import (
 func TestRemoteFileStatusComparesLocalArchive(t *testing.T) {
 	location := time.FixedZone("CST", 8*60*60)
 	dir := t.TempDir()
-	service := NewService(nil, config.Config{Location: location, SkipToday: true}, nil)
+	service := NewService(nil, config.Config{Location: location}, nil)
 	source := config.Source{ID: "sub", Name: "2服", Directory: dir, FileGlob: "player_actions_*.csv", Enabled: true}
 	modified := time.Date(2026, 4, 24, 12, 0, 0, 0, time.UTC)
 	remote := RemoteLogFile{
@@ -25,7 +25,7 @@ func TestRemoteFileStatusComparesLocalArchive(t *testing.T) {
 	}
 	archived := toArchivedSMBFile(source, remote)
 
-	pending := service.remoteFileStatus(source, remote, archived)
+	pending := service.remoteFileStatus(source, remote, archived, true)
 	if pending.Status != "REMOTE" {
 		t.Fatalf("empty archive status = %s, want REMOTE", pending.Status)
 	}
@@ -39,7 +39,7 @@ func TestRemoteFileStatusComparesLocalArchive(t *testing.T) {
 	if err := os.WriteFile(archived.Path, []byte("abc"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	changed := service.remoteFileStatus(source, remote, archived)
+	changed := service.remoteFileStatus(source, remote, archived, true)
 	if changed.Status != "CHANGED" {
 		t.Fatalf("size mismatch status = %s, want CHANGED", changed.Status)
 	}
@@ -50,7 +50,7 @@ func TestRemoteFileStatusComparesLocalArchive(t *testing.T) {
 	if err := os.Chtimes(archived.Path, modified, modified); err != nil {
 		t.Fatal(err)
 	}
-	copied := service.remoteFileStatus(source, remote, archived)
+	copied := service.remoteFileStatus(source, remote, archived, true)
 	if copied.Status != "COPIED" {
 		t.Fatalf("matching archive status = %s, want COPIED", copied.Status)
 	}
@@ -83,5 +83,20 @@ func TestWriteArchiveFileIgnoresStaleFixedTmpFile(t *testing.T) {
 	}
 	if info.ModTime().UTC().UnixMilli() != modified.UnixMilli() {
 		t.Fatalf("mtime = %s, want %s", info.ModTime().UTC(), modified)
+	}
+}
+
+func TestRemoteFileStatusUsesExplicitSkipTodaySetting(t *testing.T) {
+	location := time.FixedZone("CST", 8*60*60)
+	service := NewService(nil, config.Config{Location: location}, nil)
+	source := config.Source{ID: "main", Directory: t.TempDir()}
+	future := time.Now().In(location).AddDate(0, 0, 7)
+	remote := RemoteLogFile{FileName: "player_actions_" + future.Format("2006-01-02") + ".csv", LastModified: future}
+	archived := toArchivedSMBFile(source, remote)
+	if got := service.remoteFileStatus(source, remote, archived, true).Status; got != "SKIPPED_TODAY" {
+		t.Fatalf("skip enabled status = %s", got)
+	}
+	if got := service.remoteFileStatus(source, remote, archived, false).Status; got != "REMOTE" {
+		t.Fatalf("skip disabled status = %s", got)
 	}
 }

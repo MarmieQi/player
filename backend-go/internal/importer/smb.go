@@ -21,8 +21,12 @@ import (
 )
 
 func (s *Service) listRemoteSMBFiles(ctx context.Context, requestedServerID string) ([]ImportFileStatus, error) {
+	skipToday, err := s.settings.SkipToday(ctx)
+	if err != nil {
+		return nil, err
+	}
 	result := make([]ImportFileStatus, 0)
-	err := s.withSMBShare(ctx, func(share *smb2.Share) error {
+	err = s.withSMBShare(ctx, func(share *smb2.Share) error {
 		for _, source := range s.selectedSources(ctx, requestedServerID) {
 			sourceConfig, err := s.sourceSyncSettings(ctx, source)
 			if err != nil {
@@ -42,7 +46,7 @@ func (s *Service) listRemoteSMBFiles(ctx context.Context, requestedServerID stri
 				continue
 			}
 			for _, file := range limitFiles(files, s.cfg.MaxFilesPerRun) {
-				result = append(result, s.remoteFileStatus(source, file, toArchivedSMBFile(source, file)))
+				result = append(result, s.remoteFileStatus(source, file, toArchivedSMBFile(source, file), skipToday))
 			}
 		}
 		return nil
@@ -114,27 +118,22 @@ type smbSourceSettings struct {
 }
 
 func (s *Service) sourceSyncSettings(ctx context.Context, source config.Source) (smbSourceSettings, error) {
-	result := smbSourceSettings{
-		directory: strings.TrimSpace(s.cfg.SMBDirectory),
-		fileGlob:  firstNonBlank(s.cfg.SMBFileGlob, source.FileGlob),
-		recursive: s.cfg.SMBRecursive,
+	sourceConfig, ok, err := s.settings.SourceByID(ctx, source.ID)
+	if err != nil {
+		return smbSourceSettings{}, err
 	}
-	if sourceConfig, ok, err := s.settings.SourceByID(ctx, source.ID); err != nil {
-		return result, err
-	} else if ok {
-		if strings.TrimSpace(sourceConfig.SMBDirectory) != "" {
-			result.directory = strings.TrimSpace(sourceConfig.SMBDirectory)
-		}
-		if strings.TrimSpace(sourceConfig.SMBFileGlob) != "" {
-			result.fileGlob = sourceConfig.SMBFileGlob
-		}
-		result.recursive = sourceConfig.SMBRecursive
+	if !ok {
+		return smbSourceSettings{}, auth.NewHTTPError(400, "日志源未配置，请在系统设置中保存")
 	}
-	result.directory = normalizeSMBPath(result.directory)
-	if strings.TrimSpace(result.fileGlob) == "" {
-		result.fileGlob = "player_actions_*.csv"
+	fileGlob := strings.TrimSpace(sourceConfig.SMBFileGlob)
+	if fileGlob == "" {
+		fileGlob = "player_actions_*.csv"
 	}
-	return result, nil
+	return smbSourceSettings{
+		directory: normalizeSMBPath(sourceConfig.SMBDirectory),
+		fileGlob:  fileGlob,
+		recursive: sourceConfig.SMBRecursive,
+	}, nil
 }
 
 func (s *Service) withSMBShare(ctx context.Context, callback func(*smb2.Share) error) error {
@@ -238,7 +237,7 @@ func toArchivedSMBFile(source config.Source, remoteFile RemoteLogFile) RemoteLog
 	}
 }
 
-func (s *Service) remoteFileStatus(source config.Source, remoteFile, archivedFile RemoteLogFile) ImportFileStatus {
+func (s *Service) remoteFileStatus(source config.Source, remoteFile, archivedFile RemoteLogFile, skipToday bool) ImportFileStatus {
 	logDate := extractLogDate(remoteFile.FileName, s.cfg.Location)
 	effectiveDate := logDate
 	if effectiveDate == nil {
@@ -254,7 +253,7 @@ func (s *Service) remoteFileStatus(source config.Source, remoteFile, archivedFil
 	status := "REMOTE"
 	message := "远程文件，待复制"
 	today := dateOnly(time.Now().In(s.cfg.Location), s.cfg.Location)
-	if s.cfg.SkipToday && !effectiveDate.Before(today) {
+	if skipToday && !effectiveDate.Before(today) {
 		status = "SKIPPED_TODAY"
 		message = "跳过当天或未来的日志文件"
 	} else if currentArchiveFile(archivedFile.Path, archivedFile) {
@@ -381,13 +380,4 @@ func joinSMBPath(directory, name string) string {
 		return name
 	}
 	return directory + "/" + name
-}
-
-func firstNonBlank(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
 }

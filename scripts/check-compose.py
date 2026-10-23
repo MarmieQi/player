@@ -97,6 +97,17 @@ class ComposeConfigTests(unittest.TestCase):
         self.assertEqual(Path(services["mysql"]["volumes"][0]["source"]).resolve(), (ROOT / "custom-data/mysql").resolve())
         self.assertIn('"${MYSQL_ROOT_PASSWORD}"', services["mysql"]["healthcheck"]["test"][1])
 
+    def test_retired_business_environment_is_not_forwarded(self):
+        services = self.config({
+            "PLAYER_LOGS_SMB_HOST": "retired-host",
+            "PLAYER_LOGS_SMB_PASSWORD": "retired-password",
+            "PLAYER_LOGS_SMB_DIRECTORY": "retired-directory",
+            "PLAYER_LOGS_IMPORTER_SKIP_TODAY": "false",
+        })
+        backend = services["backend"]["environment"]
+        self.assertFalse(any(key.startswith("PLAYER_LOGS_SMB_") for key in backend))
+        self.assertNotIn("PLAYER_LOGS_IMPORTER_SKIP_TODAY", backend)
+
     def test_forwarded_backend_environment_is_actually_read(self):
         services = self.config()
         source = (ROOT / "backend-go/internal/config/config.go").read_text(encoding="utf-8")

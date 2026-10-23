@@ -1737,16 +1737,7 @@ function normalizeSyncConfig(config) {
     skipToday: config.skipToday !== false,
     shareTtlMinutes: normalizeShareTtlMinutes(config.shareTtlMinutes),
     logQueryShareTtlMinutes: normalizeShareTtlMinutes(config.logQueryShareTtlMinutes),
-    autoTasks: Array.isArray(config.autoTasks) && config.autoTasks.length
-      ? config.autoTasks.map(normalizeAutoTask)
-      : (config.sources || []).map((source) => normalizeAutoTask({
-          serverId: source.sourceId,
-          serverName: source.sourceName,
-          syncEnabled: Boolean(config.autoRun),
-          syncTime: defaultSyncTime(source.sourceId),
-          importEnabled: Boolean(config.autoRun),
-          importTime: cronToTime(config.syncCron) || defaultImportTime(source.sourceId)
-        }))
+    autoTasks: (Array.isArray(config.autoTasks) ? config.autoTasks : []).map(normalizeAutoTask)
   }
   return normalized
 }
@@ -1779,16 +1770,6 @@ function defaultImportTime(serverId) {
 function validTime(value) {
   const text = String(value || '').trim()
   return /^\d{2}:\d{2}$/.test(text) ? text : ''
-}
-
-function cronToTime(cron) {
-  const parts = String(cron || '').trim().split(/\s+/)
-  if (parts.length < 3) return ''
-  const minute = Number(parts[1])
-  const hour = Number(parts[2])
-  if (!Number.isInteger(minute) || !Number.isInteger(hour)) return ''
-  if (minute < 0 || minute > 59 || hour < 0 || hour > 23) return ''
-  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
 }
 
 async function loadAstrbotKey() {
