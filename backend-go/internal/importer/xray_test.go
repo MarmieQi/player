@@ -1,6 +1,7 @@
 package importer
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -170,7 +171,7 @@ func TestXrayDiskStoreRoundTripPreservesEventsAfterWriterEviction(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	events, err := readXrayDiskEvents(store.players[first.playerName], first.playerName, location)
+	events, err := readXrayDiskEventsContext(context.Background(), store.players[first.playerName], first.playerName, location)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +218,7 @@ func TestXrayDiskStoreResultsMatchMemoryAnalysis(t *testing.T) {
 		}
 	}
 
-	got, err := store.results()
+	got, err := store.resultsContext(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +257,7 @@ func memoryXrayResults(eventsByPlayer map[string][]xrayEvent) []XrayPlayerRiskVi
 		sort.Slice(events, func(i, j int) bool {
 			return events[i].happenedAt.Before(events[j].happenedAt)
 		})
-		result := analyzePlayer(playerName, events)
+		result := analyzePlayerContext(context.Background(), playerName, events)
 		if includeXrayResult(result) {
 			results = append(results, result)
 		}

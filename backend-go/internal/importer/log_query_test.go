@@ -396,3 +396,74 @@ func TestLogQuerySelectedActions(t *testing.T) {
 		t.Fatalf("existing action API changed: %v", err)
 	}
 }
+
+func TestAdminCoordinateRadiusAndLegacyBox(t *testing.T) {
+	service := &LogQueryService{importer: &Service{cfg: config.Config{Location: time.UTC}}}
+	number := func(value float64) *float64 { return &value }
+	request := LogQueryRequest{ServerID: "main", QueryType: queryTypeCoordinate, FromDate: "2026-10-23", ToDate: "2026-10-23", RangeMode: "radius", X1: number(0), Y1: number(0), Z1: number(0), Radius: number(5), Dimension: "主世界"}
+	criteria, err := service.validateCriteria(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := []string{"2026-10-23", "00:00:00", "Alex", "放入容器", "999", "999", "999", "主世界", "3", "4", "0", "主世界", "minecraft:stone", "x1"}
+	if !criteria.matches(row) {
+		t.Fatal("sphere boundary missed or player coordinates used")
+	}
+	row[10] = "1"
+	if criteria.matches(row) {
+		t.Fatal("sphere matched a point only inside its bounding cube")
+	}
+	row[10] = "0"
+	row[11] = "下界"
+	if criteria.matches(row) {
+		t.Fatal("dimension filter ignored")
+	}
+	view := newLogQueryState("main", "主服", criteria).view(1, 100)
+	if view.RangeMode != "radius" || view.Radius == nil || *view.Radius != 5 {
+		t.Fatalf("radius task lost mode: %#v", view)
+	}
+	request.Radius = number(200)
+	if _, err := service.validateCriteria(request); err != nil {
+		t.Fatalf("200-block admin radius rejected: %v", err)
+	}
+	request.Radius = number(0)
+	criteria, err = service.validateCriteria(request)
+	if err != nil || !criteria.pointInBox("0", "0", "0", "主世界") || criteria.pointInBox("1", "0", "0", "主世界") {
+		t.Fatal("zero radius is not exact center")
+	}
+	request.RangeMode = ""
+	request.X2 = number(-5)
+	request.Y2 = number(-5)
+	request.Z2 = number(-5)
+	criteria, err = service.validateCriteria(request)
+	if err != nil || criteria.radius != nil || !criteria.pointInBox("-3", "-3", "-3", "主世界") {
+		t.Fatalf("legacy box changed: %v", err)
+	}
+}
+
+func TestAdminCoordinateRangeValidation(t *testing.T) {
+	service := &LogQueryService{importer: &Service{cfg: config.Config{Location: time.UTC}}}
+	number := func(value float64) *float64 { return &value }
+	base := LogQueryRequest{ServerID: "main", QueryType: queryTypeCoordinate, FromDate: "2026-10-23", ToDate: "2026-10-23", RangeMode: "radius", X1: number(1), Y1: number(2), Z1: number(3), Radius: number(5)}
+	for _, tc := range []struct {
+		name   string
+		change func(*LogQueryRequest)
+	}{
+		{"missing radius", func(r *LogQueryRequest) { r.Radius = nil }},
+		{"negative radius", func(r *LogQueryRequest) { r.Radius = number(-1) }},
+		{"excessive radius", func(r *LogQueryRequest) { r.Radius = number(201) }},
+		{"nonfinite radius", func(r *LogQueryRequest) { r.Radius = number(math.NaN()) }},
+		{"missing center", func(r *LogQueryRequest) { r.Y1 = nil }},
+		{"nonfinite center", func(r *LogQueryRequest) { r.X1 = number(math.Inf(1)) }},
+		{"unknown mode", func(r *LogQueryRequest) { r.RangeMode = "unknown" }},
+		{"missing box endpoint", func(r *LogQueryRequest) { r.RangeMode = "box" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := base
+			tc.change(&request)
+			if _, err := service.validateCriteria(request); err == nil {
+				t.Fatal("invalid range accepted")
+			}
+		})
+	}
+}

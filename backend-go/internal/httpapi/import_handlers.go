@@ -152,3 +152,28 @@ func queryBool(r *http.Request, key string, fallback bool) bool {
 	}
 	return value
 }
+
+type queryCancelRequest struct {
+	ServerID  string `json:"serverId"`
+	QueryType string `json:"queryType"`
+	JobID     string `json:"jobId"`
+}
+
+func (s *Server) cancelLogQuery(w http.ResponseWriter, r *http.Request) {
+	var request queryCancelRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "请求体不是有效 JSON")
+		return
+	}
+	result, err := s.logQueryService.Cancel(r.Context(), request.ServerID, request.QueryType, request.JobID)
+	s.writeHTTPErrorResult(w, http.StatusOK, result, err)
+}
+func (s *Server) cancelXrayAnalysis(w http.ResponseWriter, r *http.Request) {
+	var request queryCancelRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "请求体不是有效 JSON")
+		return
+	}
+	result, err := s.xrayService.Cancel(r.Context(), request.ServerID, request.JobID)
+	s.writeHTTPErrorResult(w, http.StatusOK, result, err)
+}

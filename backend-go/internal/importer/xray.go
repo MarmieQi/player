@@ -345,14 +345,28 @@ func (s *XrayAnalysisService) validateCriteria(request XrayAnalysisRequest) (xra
 func (s *XrayAnalysisService) run(state *xrayState, source config.Source) {
 	state.markRunning()
 	defer func() {
+		state.mu.Lock()
+		cancelled := cancelledQuery(state.task, &state.status, &state.message, &state.finishedAt, &state.currentFile)
+		if cancelled {
+			state.players = nil
+		}
+		state.mu.Unlock()
+		if cancelled {
+			s.persistTaskState(state)
+		}
+		state.task.cancel()
 		s.mu.Lock()
 		s.running[state.criteria.serverID] = false
 		s.mu.Unlock()
 	}()
+	ctx := state.task.ctx
+	if ctx.Err() != nil {
+		return
+	}
 	store, err := newXrayDiskStore(s.importer.cfg.XrayTempDirectory, state.jobID, s.importer.cfg.Location)
 	if err != nil {
 		state.markFailed(err.Error())
-		_ = s.saveState(context.Background(), state)
+		s.persistTaskState(state)
 		return
 	}
 	defer func() {
@@ -361,11 +375,14 @@ func (s *XrayAnalysisService) run(state *xrayState, source config.Source) {
 	files, err := s.importer.localFiles(source)
 	if err != nil {
 		state.markFailed(err.Error())
-		_ = s.saveState(context.Background(), state)
+		s.persistTaskState(state)
 		return
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	for _, file := range files {
+		if ctx.Err() != nil {
+			return
+		}
 		fileDate := extractLogDate(file.FileName, s.importer.cfg.Location)
 		if fileDate != nil {
 			if fileDate.Before(dateOnly(state.criteria.fromTime, s.importer.cfg.Location)) || fileDate.After(dateOnly(state.criteria.toTime, s.importer.cfg.Location)) {
@@ -373,28 +390,37 @@ func (s *XrayAnalysisService) run(state *xrayState, source config.Source) {
 			}
 		}
 		state.markFileStarted(file)
-		rows, temporaryStorageFailed, err := s.scanXrayFile(file, state.criteria, store)
+		rows, temporaryStorageFailed, err := s.scanXrayFile(file, state.criteria, store, ctx)
 		state.addScannedRows(rows)
+		if ctx.Err() != nil {
+			return
+		}
 		if err != nil {
 			if temporaryStorageFailed {
 				state.markFailed(err.Error())
-				_ = s.saveState(context.Background(), state)
+				s.persistTaskState(state)
 				return
 			}
 			state.markFileFailed(file, err.Error())
 		}
 	}
-	results, err := store.results()
+	results, err := store.resultsContext(ctx)
+	if ctx.Err() != nil {
+		return
+	}
 	if err != nil {
 		state.markFailed(err.Error())
-		_ = s.saveState(context.Background(), state)
+		s.persistTaskState(state)
+		return
+	}
+	if ctx.Err() != nil {
 		return
 	}
 	state.markFinished(results)
-	_ = s.saveState(context.Background(), state)
+	s.persistTaskState(state)
 }
 
-func (s *XrayAnalysisService) scanXrayFile(file RemoteLogFile, criteria xrayCriteria, store *xrayDiskStore) (int64, bool, error) {
+func (s *XrayAnalysisService) scanXrayFile(file RemoteLogFile, criteria xrayCriteria, store *xrayDiskStore, ctx context.Context) (int64, bool, error) {
 	opened, err := os.Open(file.Path)
 	if err != nil {
 		return 0, false, err
@@ -405,6 +431,9 @@ func (s *XrayAnalysisService) scanXrayFile(file RemoteLogFile, criteria xrayCrit
 	var scannedRows int64
 	var lineNumber int64
 	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return scannedRows, false, err
+		}
 		lineNumber++
 		line := scanner.Text()
 		if strings.TrimSpace(line) == "" {
@@ -494,29 +523,35 @@ func xrayEventFromRow(file RemoteLogFile, lineNumber int64, columns []string, lo
 	}, true
 }
 
-func analyzePlayer(playerName string, events []xrayEvent) XrayPlayerRiskView {
-	analysisMetrics := collectMetrics(events)
-	strongEvidence := append(detectTurnEvidence(events), detectDirectVeinEvidence(events)...)
-	weakEvidence := detectShortStraightEvidence(events)
-	bedEvidence := detectBedBlastEvidence(events, analysisMetrics)
+func analyzePlayerContext(ctx context.Context, playerName string, events []xrayEvent) XrayPlayerRiskView {
+	if ctx.Err() != nil {
+		return XrayPlayerRiskView{}
+	}
+	analysisMetrics := collectMetrics(events, ctx)
+	strongEvidence := append(detectTurnEvidence(events, ctx), detectDirectVeinEvidence(events, ctx)...)
+	weakEvidence := detectShortStraightEvidence(events, ctx)
+	bedEvidence := detectBedBlastEvidence(events, analysisMetrics, ctx)
 	allEvidence := append([]XrayEvidenceView{}, strongEvidence...)
 	allEvidence = append(allEvidence, bedEvidence...)
 	allEvidence = append(allEvidence, weakEvidence...)
-	allEvidence = attachEvidenceContextRows(allEvidence, events, 20)
+	allEvidence = attachEvidenceContextRows(allEvidence, events, 20, ctx)
 
-	sessions := splitMiningSessions(events)
+	sessions := splitMiningSessions(events, ctx)
 	bestSessionEvents := events
 	bestSessionScore := -1
 	for _, session := range sessions {
-		metrics := collectMetrics(session)
-		score := rawRiskScore(metrics, len(strongEvidence), weakEvidenceQualified(weakEvidence), len(bedEvidence) > 0)
+		if ctx.Err() != nil {
+			return XrayPlayerRiskView{}
+		}
+		metrics := collectMetrics(session, ctx)
+		score := rawRiskScore(metrics, len(strongEvidence), weakEvidenceQualified(weakEvidence, ctx), len(bedEvidence) > 0)
 		if score > bestSessionScore {
 			bestSessionScore = score
 			bestSessionEvents = session
 		}
 	}
-	sessionMetrics := collectMetrics(bestSessionEvents)
-	qualifiedWeak := weakEvidenceQualified(weakEvidence)
+	sessionMetrics := collectMetrics(bestSessionEvents, ctx)
+	qualifiedWeak := weakEvidenceQualified(weakEvidence, ctx)
 	riskScore := rawRiskScore(sessionMetrics, len(strongEvidence), qualifiedWeak, len(bedEvidence) > 0)
 	riskScore = applyEvidenceCap(riskScore, len(strongEvidence), qualifiedWeak, len(bedEvidence) > 0)
 
@@ -593,7 +628,10 @@ type rareVein struct {
 	events []xrayEvent
 }
 
-func collectMetrics(events []xrayEvent) playerMetrics {
+func collectMetrics(events []xrayEvent, ctxs ...context.Context) playerMetrics {
+	if xrayCancelled(ctxs) {
+		return playerMetrics{}
+	}
 	metrics := playerMetrics{oreCounts: map[string]int64{}, rareOreCounts: map[string]int64{}}
 	if len(events) == 0 {
 		return metrics
@@ -603,6 +641,9 @@ func collectMetrics(events []xrayEvent) playerMetrics {
 	var rareEvents []xrayEvent
 	var suspiciousRareEvents []xrayEvent
 	for _, event := range events {
+		if xrayCancelled(ctxs) {
+			return playerMetrics{}
+		}
 		metrics.breaks++
 		if event.hasPoint && event.point.y <= 32 {
 			metrics.undergroundBreaks++
@@ -634,22 +675,28 @@ func collectMetrics(events []xrayEvent) playerMetrics {
 		metrics.rareRatio = float64(metrics.rareOreBreaks) / float64(metrics.undergroundBreaks)
 		metrics.suspiciousRareRatio = float64(metrics.suspiciousRareOreBreaks) / float64(metrics.undergroundBreaks)
 	}
-	metrics.rareVeins = buildRareVeins(rareEvents)
-	metrics.peakRareOreCount, metrics.peakRareOreStart, metrics.peakRareOreEnd = peakRareOreWindow(rareEvents)
-	metrics.peakRareVeinCount = peakRareVeinWindow(metrics.rareVeins)
-	metrics.suspiciousRareVeins = buildRareVeins(suspiciousRareEvents)
-	metrics.suspiciousPeakRareOreCount, _, _ = peakRareOreWindow(suspiciousRareEvents)
-	metrics.suspiciousPeakRareVeinCount = peakRareVeinWindow(metrics.suspiciousRareVeins)
+	metrics.rareVeins = buildRareVeins(rareEvents, ctxs...)
+	metrics.peakRareOreCount, metrics.peakRareOreStart, metrics.peakRareOreEnd = peakRareOreWindow(rareEvents, ctxs...)
+	metrics.peakRareVeinCount = peakRareVeinWindow(metrics.rareVeins, ctxs...)
+	metrics.suspiciousRareVeins = buildRareVeins(suspiciousRareEvents, ctxs...)
+	metrics.suspiciousPeakRareOreCount, _, _ = peakRareOreWindow(suspiciousRareEvents, ctxs...)
+	metrics.suspiciousPeakRareVeinCount = peakRareVeinWindow(metrics.suspiciousRareVeins, ctxs...)
 	return metrics
 }
 
-func splitMiningSessions(events []xrayEvent) [][]xrayEvent {
+func splitMiningSessions(events []xrayEvent, ctxs ...context.Context) [][]xrayEvent {
+	if xrayCancelled(ctxs) {
+		return nil
+	}
 	if len(events) == 0 {
 		return nil
 	}
 	var sessions [][]xrayEvent
 	var current []xrayEvent
 	for _, event := range events {
+		if xrayCancelled(ctxs) {
+			return nil
+		}
 		if !isMiningSessionEvent(event) {
 			continue
 		}
@@ -681,11 +728,20 @@ func isMiningSessionEvent(event xrayEvent) bool {
 	return underground && (event.tunnelBlock || event.oreType != "")
 }
 
-func buildRareVeins(events []xrayEvent) []rareVein {
+func buildRareVeins(events []xrayEvent, ctxs ...context.Context) []rareVein {
+	if xrayCancelled(ctxs) {
+		return nil
+	}
 	var veins []rareVein
 	for _, event := range events {
+		if xrayCancelled(ctxs) {
+			return nil
+		}
 		accepted := false
 		for i := range veins {
+			if xrayCancelled(ctxs) {
+				return nil
+			}
 			last := veins[i].events[len(veins[i].events)-1]
 			if last.hasPoint && event.hasPoint && last.row.Dimension2 == event.row.Dimension2 &&
 				event.happenedAt.Sub(last.happenedAt) <= 30*time.Second &&
@@ -702,11 +758,17 @@ func buildRareVeins(events []xrayEvent) []rareVein {
 	return veins
 }
 
-func peakRareOreWindow(events []xrayEvent) (int, *time.Time, *time.Time) {
+func peakRareOreWindow(events []xrayEvent, ctxs ...context.Context) (int, *time.Time, *time.Time) {
+	if xrayCancelled(ctxs) {
+		return 0, nil, nil
+	}
 	best := 0
 	var bestStart, bestEnd *time.Time
 	left := 0
 	for right, event := range events {
+		if xrayCancelled(ctxs) {
+			return 0, nil, nil
+		}
 		for left <= right && event.happenedAt.Sub(events[left].happenedAt) > shortRareOreWindowSecond*time.Second {
 			left++
 		}
@@ -720,12 +782,21 @@ func peakRareOreWindow(events []xrayEvent) (int, *time.Time, *time.Time) {
 	return best, bestStart, bestEnd
 }
 
-func peakRareVeinWindow(veins []rareVein) int {
+func peakRareVeinWindow(veins []rareVein, ctxs ...context.Context) int {
+	if xrayCancelled(ctxs) {
+		return 0
+	}
 	best := 0
 	left := 0
 	for right, vein := range veins {
+		if xrayCancelled(ctxs) {
+			return 0
+		}
 		t := vein.events[0].happenedAt
 		for left <= right && t.Sub(veins[left].events[0].happenedAt) > shortRareOreWindowSecond*time.Second {
+			if xrayCancelled(ctxs) {
+				return 0
+			}
 			left++
 		}
 		if count := right - left + 1; count > best {
@@ -735,21 +806,27 @@ func peakRareVeinWindow(veins []rareVein) int {
 	return best
 }
 
-func detectTurnEvidence(events []xrayEvent) []XrayEvidenceView {
+func detectTurnEvidence(events []xrayEvent, ctxs ...context.Context) []XrayEvidenceView {
+	if xrayCancelled(ctxs) {
+		return nil
+	}
 	var evidence []XrayEvidenceView
 	var usedTargets []xrayEvent
 	for index, target := range events {
+		if xrayCancelled(ctxs) {
+			return nil
+		}
 		if !target.trackingTarget || !target.hasPoint {
 			continue
 		}
-		if sameTargetUsed(usedTargets, target) {
+		if sameTargetUsed(usedTargets, target, ctxs...) {
 			continue
 		}
-		window := recentTunnelEvents(events[:index], target, turnLookbackSeconds)
+		window := recentTunnelEvents(events[:index], target, turnLookbackSeconds, ctxs...)
 		if len(window) < minTurnMainTunnelBlocks+minTurnSideTunnelBlocks {
 			continue
 		}
-		if ev, ok := turnEvidenceFromWindow(window, target); ok {
+		if ev, ok := turnEvidenceFromWindow(window, target, ctxs...); ok {
 			evidence = append(evidence, ev)
 			usedTargets = append(usedTargets, target)
 		}
@@ -757,8 +834,14 @@ func detectTurnEvidence(events []xrayEvent) []XrayEvidenceView {
 	return evidence
 }
 
-func turnEvidenceFromWindow(window []xrayEvent, target xrayEvent) (XrayEvidenceView, bool) {
+func turnEvidenceFromWindow(window []xrayEvent, target xrayEvent, ctxs ...context.Context) (XrayEvidenceView, bool) {
+	if xrayCancelled(ctxs) {
+		return XrayEvidenceView{}, false
+	}
 	for sideLen := minTurnSideTunnelBlocks; sideLen <= maxTurnSideTunnelBlocks; sideLen++ {
+		if xrayCancelled(ctxs) {
+			return XrayEvidenceView{}, false
+		}
 		if len(window) < minTurnMainTunnelBlocks+sideLen {
 			continue
 		}
@@ -770,8 +853,8 @@ func turnEvidenceFromWindow(window []xrayEvent, target xrayEvent) (XrayEvidenceV
 		if len(main) < minTurnMainTunnelBlocks {
 			continue
 		}
-		mainFit := straightness(main)
-		sideFit := straightness(side)
+		mainFit := straightness(main, ctxs...)
+		sideFit := straightness(side, ctxs...)
 		if mainFit < minTurnCorridorFit || sideFit < minTurnCorridorFit {
 			continue
 		}
@@ -783,7 +866,7 @@ func turnEvidenceFromWindow(window []xrayEvent, target xrayEvent) (XrayEvidenceV
 		if distance(side[len(side)-1].point, target.point) > 5.5 {
 			continue
 		}
-		rows := rowsFromEvents(append(append([]xrayEvent{}, main...), append(side, target)...))
+		rows := rowsFromEvents(append(append([]xrayEvent{}, main...), append(side, target)...), ctxs...)
 		return XrayEvidenceView{
 			Type:      "TURN_TO_RARE_ORE",
 			Score:     26,
@@ -796,21 +879,33 @@ func turnEvidenceFromWindow(window []xrayEvent, target xrayEvent) (XrayEvidenceV
 	return XrayEvidenceView{}, false
 }
 
-func detectDirectVeinEvidence(events []xrayEvent) []XrayEvidenceView {
+func detectDirectVeinEvidence(events []xrayEvent, ctxs ...context.Context) []XrayEvidenceView {
+	if xrayCancelled(ctxs) {
+		return nil
+	}
 	var targetEvents []xrayEvent
 	for _, event := range events {
+		if xrayCancelled(ctxs) {
+			return nil
+		}
 		if event.trackingTarget {
 			targetEvents = append(targetEvents, event)
 		}
 	}
-	veins := buildRareVeins(targetEvents)
+	veins := buildRareVeins(targetEvents, ctxs...)
 	used := map[int]bool{}
 	var evidence []XrayEvidenceView
 	for i := 0; i < len(veins); i++ {
+		if xrayCancelled(ctxs) {
+			return nil
+		}
 		if used[i] {
 			continue
 		}
 		for j := i + 1; j < len(veins); j++ {
+			if xrayCancelled(ctxs) {
+				return nil
+			}
 			if used[j] {
 				continue
 			}
@@ -824,7 +919,7 @@ func detectDirectVeinEvidence(events []xrayEvent) []XrayEvidenceView {
 			if dist < minDirectVeinDistance || dist > maxDirectVeinDistance {
 				continue
 			}
-			gapBlocks := undergroundBlocksBetween(events, a, b)
+			gapBlocks := undergroundBlocksBetween(events, a, b, ctxs...)
 			if gapBlocks == 0 || gapBlocks > maxDirectVeinGapBlocks {
 				continue
 			}
@@ -835,7 +930,7 @@ func detectDirectVeinEvidence(events []xrayEvent) []XrayEvidenceView {
 				StartedAt: localDateTimeValue(a.happenedAt),
 				EndedAt:   localDateTimeValue(b.happenedAt),
 				Summary:   "矿脉间直达：两个稀有矿脉相距 " + formatDistance(dist) + " 格，中间仅连续挖掘 " + strconvI64(int64(gapBlocks)) + " 个普通方块",
-				Rows:      rowsFromEvents([]xrayEvent{a, b}),
+				Rows:      rowsFromEvents([]xrayEvent{a, b}, ctxs...),
 			})
 			break
 		}
@@ -843,20 +938,26 @@ func detectDirectVeinEvidence(events []xrayEvent) []XrayEvidenceView {
 	return evidence
 }
 
-func detectShortStraightEvidence(events []xrayEvent) []XrayEvidenceView {
+func detectShortStraightEvidence(events []xrayEvent, ctxs ...context.Context) []XrayEvidenceView {
+	if xrayCancelled(ctxs) {
+		return nil
+	}
 	var evidence []XrayEvidenceView
 	for index, target := range events {
+		if xrayCancelled(ctxs) {
+			return nil
+		}
 		if !target.trackingTarget || !target.hasPoint {
 			continue
 		}
-		window := recentTunnelEvents(events[:index], target, maxShortStraightSeconds)
+		window := recentTunnelEvents(events[:index], target, maxShortStraightSeconds, ctxs...)
 		if len(window) < minShortStraightBlocks {
 			continue
 		}
 		if len(window) > maxShortStraightBlocks {
 			window = window[len(window)-maxShortStraightBlocks:]
 		}
-		if straightness(window) < minShortStraightness {
+		if straightness(window, ctxs...) < minShortStraightness {
 			continue
 		}
 		evidence = append(evidence, XrayEvidenceView{
@@ -865,13 +966,16 @@ func detectShortStraightEvidence(events []xrayEvent) []XrayEvidenceView {
 			StartedAt: localDateTimeValue(window[0].happenedAt),
 			EndedAt:   localDateTimeValue(target.happenedAt),
 			Summary:   "短直线弱证据：" + strconvI64(int64(len(window))) + " 格普通方块后命中 " + catalog.OreLabel(target.oreType),
-			Rows:      rowsFromEvents(append(append([]xrayEvent{}, window...), target)),
+			Rows:      rowsFromEvents(append(append([]xrayEvent{}, window...), target), ctxs...),
 		})
 	}
 	return evidence
 }
 
-func detectBedBlastEvidence(events []xrayEvent, metrics playerMetrics) []XrayEvidenceView {
+func detectBedBlastEvidence(events []xrayEvent, metrics playerMetrics, ctxs ...context.Context) []XrayEvidenceView {
+	if xrayCancelled(ctxs) {
+		return nil
+	}
 	if metrics.ancientDebrisBreaks < 3 {
 		return nil
 	}
@@ -879,6 +983,9 @@ func detectBedBlastEvidence(events []xrayEvent, metrics playerMetrics) []XrayEvi
 	var rows []LogQueryRow
 	var start, end *time.Time
 	for _, event := range events {
+		if xrayCancelled(ctxs) {
+			return nil
+		}
 		if strings.Contains(event.row.Dimension2, "下界") || strings.EqualFold(event.row.Dimension2, "nether") {
 			if event.tunnelBlock {
 				tunnelCount++
@@ -980,6 +1087,7 @@ func riskReasons(session, analysis playerMetrics, strongEvidenceCount int, weakQ
 }
 
 type xrayState struct {
+	task         *queryTask
 	mu           sync.Mutex
 	jobID        string
 	serverID     string
@@ -997,14 +1105,16 @@ type xrayState struct {
 }
 
 func newXrayState(source config.Source, criteria xrayCriteria) *xrayState {
-	return &xrayState{jobID: newJobID(), serverID: source.ID, serverName: source.Name, criteria: criteria, startedAt: time.Now().UTC(), status: "PENDING"}
+	return &xrayState{task: newQueryTask(), jobID: newJobID(), serverID: source.ID, serverName: source.Name, criteria: criteria, startedAt: time.Now().UTC(), status: "PENDING"}
 }
 
 func (s *xrayState) markRunning() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.status = "RUNNING"
-	s.message = "正在扫描 CSV"
+	if s.task.ctx.Err() == nil {
+		s.status = "RUNNING"
+		s.message = "正在扫描 CSV"
+	}
 }
 
 func (s *xrayState) markFileStarted(file RemoteLogFile) {
@@ -1031,6 +1141,9 @@ func (s *xrayState) markFileFailed(file RemoteLogFile, message string) {
 func (s *xrayState) markFinished(players []XrayPlayerRiskView) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.task != nil && s.task.ctx.Err() != nil {
+		return
+	}
 	now := time.Now().UTC()
 	s.finishedAt = &now
 	s.status = "FINISHED"
@@ -1061,6 +1174,9 @@ func (s *xrayState) markFinished(players []XrayPlayerRiskView) {
 func (s *xrayState) markFailed(message string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.task != nil && s.task.ctx.Err() != nil {
+		return
+	}
 	now := time.Now().UTC()
 	s.finishedAt = &now
 	s.status = "FAILED"
@@ -1158,9 +1274,15 @@ func parsePoint3(xRaw, yRaw, zRaw string) (point3, bool) {
 	return point3{x: x, y: y, z: z}, true
 }
 
-func recentTunnelEvents(events []xrayEvent, target xrayEvent, seconds int) []xrayEvent {
+func recentTunnelEvents(events []xrayEvent, target xrayEvent, seconds int, ctxs ...context.Context) []xrayEvent {
+	if xrayCancelled(ctxs) {
+		return nil
+	}
 	result := make([]xrayEvent, 0)
 	for i := len(events) - 1; i >= 0; i-- {
+		if xrayCancelled(ctxs) {
+			return nil
+		}
 		event := events[i]
 		if target.happenedAt.Sub(event.happenedAt) > time.Duration(seconds)*time.Second {
 			break
@@ -1171,13 +1293,22 @@ func recentTunnelEvents(events []xrayEvent, target xrayEvent, seconds int) []xra
 		result = append(result, event)
 	}
 	for left, right := 0, len(result)-1; left < right; left, right = left+1, right-1 {
+		if xrayCancelled(ctxs) {
+			return nil
+		}
 		result[left], result[right] = result[right], result[left]
 	}
 	return result
 }
 
-func sameTargetUsed(used []xrayEvent, target xrayEvent) bool {
+func sameTargetUsed(used []xrayEvent, target xrayEvent, ctxs ...context.Context) bool {
+	if xrayCancelled(ctxs) {
+		return false
+	}
 	for _, event := range used {
+		if xrayCancelled(ctxs) {
+			return false
+		}
 		if event.row.Dimension2 == target.row.Dimension2 && math.Abs(target.happenedAt.Sub(event.happenedAt).Seconds()) <= 60 && distance(event.point, target.point) < 3 {
 			return true
 		}
@@ -1185,12 +1316,18 @@ func sameTargetUsed(used []xrayEvent, target xrayEvent) bool {
 	return false
 }
 
-func straightness(events []xrayEvent) float64 {
+func straightness(events []xrayEvent, ctxs ...context.Context) float64 {
+	if xrayCancelled(ctxs) {
+		return 0
+	}
 	if len(events) < 2 {
 		return 1
 	}
 	path := 0.0
 	for i := 1; i < len(events); i++ {
+		if xrayCancelled(ctxs) {
+			return 0
+		}
 		path += distance(events[i-1].point, events[i].point)
 	}
 	if path == 0 {
@@ -1217,9 +1354,15 @@ func distance(a, b point3) float64 {
 	return math.Sqrt(dx*dx + dy*dy + dz*dz)
 }
 
-func undergroundBlocksBetween(events []xrayEvent, start, end xrayEvent) int {
+func undergroundBlocksBetween(events []xrayEvent, start, end xrayEvent, ctxs ...context.Context) int {
+	if xrayCancelled(ctxs) {
+		return 0
+	}
 	count := 0
 	for _, event := range events {
+		if xrayCancelled(ctxs) {
+			return 0
+		}
 		if event.happenedAt.After(start.happenedAt) &&
 			event.happenedAt.Before(end.happenedAt) &&
 			event.row.Dimension2 == end.row.Dimension2 &&
@@ -1230,18 +1373,27 @@ func undergroundBlocksBetween(events []xrayEvent, start, end xrayEvent) int {
 	return count
 }
 
-func weakEvidenceQualified(evidence []XrayEvidenceView) bool {
+func weakEvidenceQualified(evidence []XrayEvidenceView, ctxs ...context.Context) bool {
+	if xrayCancelled(ctxs) {
+		return false
+	}
 	if len(evidence) < 3 {
 		return false
 	}
 	var times []time.Time
 	for _, ev := range evidence {
+		if xrayCancelled(ctxs) {
+			return false
+		}
 		if ev.StartedAt != nil {
 			times = append(times, ev.StartedAt.Time)
 		}
 	}
 	sort.Slice(times, func(i, j int) bool { return times[i].Before(times[j]) })
 	for i := 2; i < len(times); i++ {
+		if xrayCancelled(ctxs) {
+			return false
+		}
 		if times[i].Sub(times[i-2]) <= 3*time.Minute {
 			return true
 		}
@@ -1249,12 +1401,18 @@ func weakEvidenceQualified(evidence []XrayEvidenceView) bool {
 	return false
 }
 
-func attachEvidenceContextRows(evidence []XrayEvidenceView, events []xrayEvent, contextRows int) []XrayEvidenceView {
+func attachEvidenceContextRows(evidence []XrayEvidenceView, events []xrayEvent, contextRows int, ctxs ...context.Context) []XrayEvidenceView {
+	if xrayCancelled(ctxs) {
+		return nil
+	}
 	if len(evidence) == 0 || len(events) == 0 || contextRows < 1 {
 		return evidence
 	}
 	enriched := make([]XrayEvidenceView, len(evidence))
 	for index, item := range evidence {
+		if xrayCancelled(ctxs) {
+			return nil
+		}
 		enriched[index] = item
 		start, end := evidenceWindow(item)
 		if start == nil && end == nil {
@@ -1264,7 +1422,7 @@ func attachEvidenceContextRows(evidence []XrayEvidenceView, events []xrayEvent, 
 		first := max(0, firstAnchor-contextRows)
 		last := min(len(events)-1, lastAnchor+contextRows)
 		contextEvents := events[first : last+1]
-		enriched[index].Rows = rowsFromEvents(contextEvents)
+		enriched[index].Rows = rowsFromEvents(contextEvents, ctxs...)
 	}
 	return enriched
 }
@@ -1317,9 +1475,15 @@ func nearestEventIndex(events []xrayEvent, target time.Time) int {
 	return index
 }
 
-func rowsFromEvents(events []xrayEvent) []LogQueryRow {
+func rowsFromEvents(events []xrayEvent, ctxs ...context.Context) []LogQueryRow {
+	if xrayCancelled(ctxs) {
+		return nil
+	}
 	rows := make([]LogQueryRow, 0, len(events))
 	for _, event := range events {
+		if xrayCancelled(ctxs) {
+			return nil
+		}
 		rows = append(rows, event.row)
 	}
 	return rows
@@ -1391,4 +1555,41 @@ func xrayDateTimeArg(value *apitype.LocalDateTime) any {
 
 func formatDistance(value float64) string {
 	return strconvI64(int64(math.Round(value)))
+}
+
+func (s *XrayAnalysisService) Cancel(ctx context.Context, serverID, jobID string) (XrayAnalysisView, error) {
+	serverID, err := requireLogQueryServer(serverID)
+	if err != nil {
+		return XrayAnalysisView{}, err
+	}
+	s.mu.Lock()
+	state := s.latest[serverID]
+	if state == nil {
+		s.mu.Unlock()
+		return XrayAnalysisView{}, auth.NewHTTPError(404, "分析任务不存在")
+	}
+	state.mu.Lock()
+	err = requestQueryCancellation(state.task, state.jobID, jobID, &state.status, &state.message)
+	state.mu.Unlock()
+	s.mu.Unlock()
+	if err != nil {
+		return XrayAnalysisView{}, err
+	}
+	return state.view(), nil
+}
+
+func xrayCancelled(contexts []context.Context) bool {
+	return len(contexts) > 0 && contexts[0].Err() != nil
+}
+
+func (s *XrayAnalysisService) persistTaskState(state *xrayState) {
+	state.mu.Lock()
+	terminal := state.status != "PENDING" && state.status != "RUNNING" && state.status != "CANCELLING"
+	state.mu.Unlock()
+	if !terminal {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = s.saveState(ctx, state)
 }

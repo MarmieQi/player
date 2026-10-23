@@ -3,6 +3,7 @@ package importer
 import (
 	"bufio"
 	"container/list"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -81,7 +82,10 @@ func (s *xrayDiskStore) accept(event xrayEvent) error {
 	return nil
 }
 
-func (s *xrayDiskStore) results() ([]XrayPlayerRiskView, error) {
+func (s *xrayDiskStore) resultsContext(ctx context.Context) ([]XrayPlayerRiskView, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := s.closeWriters(); err != nil {
 		return nil, err
 	}
@@ -93,14 +97,20 @@ func (s *xrayDiskStore) results() ([]XrayPlayerRiskView, error) {
 
 	results := make([]XrayPlayerRiskView, 0, len(playerNames))
 	for _, playerName := range playerNames {
-		events, err := readXrayDiskEvents(s.players[playerName], playerName, s.location)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		events, err := readXrayDiskEventsContext(ctx, s.players[playerName], playerName, s.location)
 		if err != nil {
 			return nil, fmt.Errorf("读取玩家 %q 的矿透临时数据失败: %w", playerName, err)
 		}
 		sort.Slice(events, func(i, j int) bool {
 			return events[i].happenedAt.Before(events[j].happenedAt)
 		})
-		result := analyzePlayer(playerName, events)
+		result := analyzePlayerContext(ctx, playerName, events)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if includeXrayResult(result) {
 			results = append(results, result)
 		}
@@ -290,7 +300,7 @@ func writeXrayDiskEvent(writer io.Writer, event xrayEvent) error {
 	return nil
 }
 
-func readXrayDiskEvents(path, playerName string, location *time.Location) ([]xrayEvent, error) {
+func readXrayDiskEventsContext(ctx context.Context, path, playerName string, location *time.Location) ([]xrayEvent, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -307,6 +317,9 @@ func readXrayDiskEvents(path, playerName string, location *time.Location) ([]xra
 
 	var events []xrayEvent
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		event, err := readXrayDiskEvent(reader, playerName, location)
 		if errors.Is(err, io.EOF) {
 			break

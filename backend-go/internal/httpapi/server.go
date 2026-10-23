@@ -81,9 +81,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/import/auto-task-logs", s.autoTaskLogs)
 	s.mux.HandleFunc("DELETE /api/import/auto-task-logs", s.clearAutoTaskLogs)
 	s.mux.HandleFunc("POST /api/import/log-query-jobs", s.startLogQuery)
+	s.mux.HandleFunc("POST /api/import/log-query-jobs/cancel", s.cancelLogQuery)
 	s.mux.HandleFunc("GET /api/import/log-query-jobs/latest", s.latestLogQuery)
 	s.mux.HandleFunc("DELETE /api/import/log-query-jobs/latest", s.clearLogQuery)
 	s.mux.HandleFunc("POST /api/import/xray-analysis-jobs", s.startXrayAnalysis)
+	s.mux.HandleFunc("POST /api/import/xray-analysis-jobs/cancel", s.cancelXrayAnalysis)
 	s.mux.HandleFunc("GET /api/import/xray-analysis-jobs/latest", s.latestXrayAnalysis)
 	s.mux.HandleFunc("DELETE /api/import/xray-analysis-jobs/latest", s.clearXrayAnalysis)
 

@@ -159,70 +159,63 @@ func (c *liveLogSnapshotCache) acquire(
 		return nil, c.initErr
 	}
 	for {
-		now := time.Now()
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		c.mu.Lock()
 		if c.closed {
 			c.mu.Unlock()
 			return nil, errors.New("当天日志临时缓存已关闭")
 		}
-		if entry := c.entries[key]; entry != nil && now.Before(entry.expiresAt) && !entry.retired {
+		if entry := c.entries[key]; entry != nil && time.Now().Before(entry.expiresAt) && !entry.retired {
 			entry.refs++
 			lease := c.lease(entry)
 			c.mu.Unlock()
 			return lease, nil
 		}
-		// Only one request per server reads SMB; concurrent requests wait for and
-		// reuse the same snapshot.
-		if flight := c.refreshing[key]; flight != nil {
-			c.mu.Unlock()
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-flight.done:
-				if flight.err != nil {
-					return nil, flight.err
-				}
-				continue
-			}
+		flight := c.refreshing[key]
+		if flight == nil {
+			flight = &liveLogSnapshotFlight{done: make(chan struct{})}
+			c.refreshing[key] = flight
+			// Refresh belongs to the shared cache, not the first querying task.
+			go c.refresh(key, flight, create)
 		}
-		flight := &liveLogSnapshotFlight{done: make(chan struct{})}
-		c.refreshing[key] = flight
 		c.mu.Unlock()
-
-		files, err := create(ctx)
-		var remove []RemoteLogFile
-		c.mu.Lock()
-		delete(c.refreshing, key)
-		flight.err = err
-		if err == nil && c.closed {
-			err = errors.New("当天日志临时缓存已关闭")
-			flight.err = err
-			remove = append(remove, files...)
-		}
-		if err == nil {
-			if previous := c.entries[key]; previous != nil {
-				previous.retired = true
-				if previous.refs == 0 {
-					remove = append(remove, previous.files...)
-				}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-flight.done:
+			if flight.err != nil {
+				return nil, flight.err
 			}
-			entry := &liveLogSnapshotEntry{
-				files:     append([]RemoteLogFile(nil), files...),
-				expiresAt: time.Now().Add(c.ttl),
-				refs:      1,
-			}
-			c.entries[key] = entry
-			close(flight.done)
-			lease := c.lease(entry)
-			c.mu.Unlock()
-			c.removeFiles(remove)
-			return lease, nil
 		}
-		close(flight.done)
-		c.mu.Unlock()
-		c.removeFiles(remove)
-		return nil, err
 	}
+}
+
+func (c *liveLogSnapshotCache) refresh(key string, flight *liveLogSnapshotFlight, create func(context.Context) ([]RemoteLogFile, error)) {
+	ctx, cancel := context.WithTimeout(context.Background(), liveLogSnapshotReadTimeout)
+	defer cancel()
+	files, err := create(ctx)
+	var remove []RemoteLogFile
+	c.mu.Lock()
+	delete(c.refreshing, key)
+	if err == nil && c.closed {
+		err = errors.New("当天日志临时缓存已关闭")
+		remove = append(remove, files...)
+	}
+	if err == nil {
+		if previous := c.entries[key]; previous != nil {
+			previous.retired = true
+			if previous.refs == 0 {
+				remove = append(remove, previous.files...)
+			}
+		}
+		c.entries[key] = &liveLogSnapshotEntry{files: append([]RemoteLogFile(nil), files...), expiresAt: time.Now().Add(c.ttl)}
+	}
+	flight.err = err
+	close(flight.done)
+	c.mu.Unlock()
+	c.removeFiles(remove)
 }
 
 func (c *liveLogSnapshotCache) lease(entry *liveLogSnapshotEntry) *liveLogSnapshotLease {

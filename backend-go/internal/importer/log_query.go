@@ -27,9 +27,12 @@ const (
 	defaultPublicLogDays   = 7
 	maxPublicLogDays       = 365
 	maxPublicLogRadius     = 100
+	maxAdminLogRadius      = 200
 )
 
 type LogQueryRequest struct {
+	RangeMode  string   `json:"rangeMode"`
+	Radius     *float64 `json:"radius"`
 	ServerID   string   `json:"serverId"`
 	FromDate   string   `json:"fromDate"`
 	ToDate     string   `json:"toDate"`
@@ -70,6 +73,8 @@ type LogQueryRow struct {
 }
 
 type LogQueryView struct {
+	RangeMode     string        `json:"rangeMode,omitempty"`
+	Radius        *float64      `json:"radius,omitempty"`
 	JobID         string        `json:"jobId"`
 	ServerID      string        `json:"serverId"`
 	ServerName    string        `json:"serverName"`
@@ -344,31 +349,50 @@ func (s *LogQueryService) run(state *logQueryState, source configlessSource, key
 	state.markRunning()
 	defer func() {
 		s.mu.Lock()
+		state.mu.Lock()
+		cancelledQuery(state.task, &state.status, &state.message, &state.finishedAt, &state.currentFile)
+		state.mu.Unlock()
+		state.task.cancel()
 		s.running[key] = false
 		s.mu.Unlock()
 	}()
+	ctx := state.task.ctx
+	if ctx.Err() != nil {
+		return
+	}
 	files, err := s.importer.localFiles(source.toConfigSource())
 	if err != nil {
 		state.markFailed(err.Error())
 		return
 	}
 	if state.criteria.includesDate(dateOnly(time.Now().In(s.importer.cfg.Location), s.importer.cfg.Location)) {
-		ctx, cancel := context.WithTimeout(context.Background(), liveLogSnapshotReadTimeout)
+		ctx, cancel := context.WithTimeout(ctx, liveLogSnapshotReadTimeout)
 		liveSnapshot, snapshotErr := s.importer.acquireTodayLogSnapshot(ctx, source.toConfigSource())
 		cancel()
+		if liveSnapshot != nil {
+			defer liveSnapshot.Release()
+		}
+		if state.task.ctx.Err() != nil {
+			return
+		}
 		if snapshotErr != nil {
 			state.markFileFailed(RemoteLogFile{FileName: "当天 SMB 日志"}, snapshotErr.Error())
 		} else {
-			defer liveSnapshot.Release()
 			files = mergeTodayLogSnapshotFiles(files, liveSnapshot.Files, s.importer.cfg.Location)
 		}
 	}
 	for _, file := range files {
+		if ctx.Err() != nil {
+			return
+		}
 		if !state.criteria.shouldScanFile(file.FileName, s.importer.cfg.Location) {
 			continue
 		}
 		state.markFileStarted(file)
 		if err := s.scanFile(state, file); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			state.markFileFailed(file, err.Error())
 		}
 	}
@@ -385,6 +409,9 @@ func (s *LogQueryService) scanFile(state *logQueryState, file RemoteLogFile) err
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	var lineNumber int64
 	for scanner.Scan() {
+		if err := state.task.ctx.Err(); err != nil {
+			return err
+		}
 		lineNumber++
 		line := scanner.Text()
 		if strings.TrimSpace(line) == "" {
@@ -449,15 +476,40 @@ func (s *LogQueryService) validateCriteria(request LogQueryRequest) (logQueryCri
 	if fromDate == nil || toDate == nil {
 		return logQueryCriteria{}, auth.NewHTTPError(400, "请选择查询开始和结束日期")
 	}
-	coords := []*float64{request.X1, request.Y1, request.Z1, request.X2, request.Y2, request.Z2}
-	labels := []string{"起点 X", "起点 Y", "起点 Z", "终点 X", "终点 Y", "终点 Z"}
+	mode := strings.TrimSpace(request.RangeMode)
+	if mode == "" {
+		mode = "box"
+	}
+	if mode != "box" && mode != "radius" {
+		return logQueryCriteria{}, auth.NewHTTPError(400, "不支持的坐标范围方式")
+	}
+	coords := []*float64{request.X1, request.Y1, request.Z1}
+	labels := []string{"起点 X", "起点 Y", "起点 Z"}
+	if mode == "radius" {
+		labels = []string{"中心 X", "中心 Y", "中心 Z"}
+		if request.Radius == nil || !finiteFloat(*request.Radius) || *request.Radius < 0 || *request.Radius > maxAdminLogRadius {
+			return logQueryCriteria{}, auth.NewHTTPError(400, "查询半径必须在 0-200 格之间")
+		}
+	} else {
+		coords = append(coords, request.X2, request.Y2, request.Z2)
+		labels = append(labels, "终点 X", "终点 Y", "终点 Z")
+	}
 	for index, value := range coords {
 		if value == nil {
 			return logQueryCriteria{}, auth.NewHTTPError(400, labels[index]+" 不能为空")
 		}
+		if !finiteFloat(*value) {
+			return logQueryCriteria{}, auth.NewHTTPError(400, labels[index]+" 必须是有限数值")
+		}
 	}
 	criteria.x1, criteria.y1, criteria.z1 = *request.X1, *request.Y1, *request.Z1
-	criteria.x2, criteria.y2, criteria.z2 = *request.X2, *request.Y2, *request.Z2
+	if mode == "radius" {
+		radius := *request.Radius
+		criteria.radius = &radius
+		criteria.x2, criteria.y2, criteria.z2 = criteria.x1, criteria.y1, criteria.z1
+	} else {
+		criteria.x2, criteria.y2, criteria.z2 = *request.X2, *request.Y2, *request.Z2
+	}
 	return criteria, nil
 }
 
@@ -593,6 +645,7 @@ func (c logQueryCriteria) pointInBox(rawX, rawY, rawZ, rawDimension string) bool
 }
 
 type logQueryState struct {
+	task         *queryTask
 	mu           sync.Mutex
 	jobID        string
 	serverID     string
@@ -610,14 +663,16 @@ type logQueryState struct {
 }
 
 func newLogQueryState(serverID, serverName string, criteria logQueryCriteria) *logQueryState {
-	return &logQueryState{jobID: newJobID(), serverID: serverID, serverName: serverName, criteria: criteria, startedAt: time.Now().UTC(), status: "PENDING"}
+	return &logQueryState{task: newQueryTask(), jobID: newJobID(), serverID: serverID, serverName: serverName, criteria: criteria, startedAt: time.Now().UTC(), status: "PENDING"}
 }
 
 func (s *logQueryState) markRunning() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.status = "RUNNING"
-	s.message = "正在扫描 CSV"
+	if s.task.ctx.Err() == nil {
+		s.status = "RUNNING"
+		s.message = "正在扫描 CSV"
+	}
 }
 
 func (s *logQueryState) markFileStarted(file RemoteLogFile) {
@@ -650,6 +705,9 @@ func (s *logQueryState) addRow(row LogQueryRow) {
 func (s *logQueryState) markFinished() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.task != nil && s.task.ctx.Err() != nil {
+		return
+	}
 	now := time.Now().UTC()
 	s.finishedAt = &now
 	s.status = "FINISHED"
@@ -681,6 +739,9 @@ func (s *logQueryState) markFinished() {
 func (s *logQueryState) markFailed(message string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.task != nil && s.task.ctx.Err() != nil {
+		return
+	}
 	now := time.Now().UTC()
 	s.finishedAt = &now
 	s.status = "FAILED"
@@ -709,7 +770,16 @@ func (s *logQueryState) view(page, pageSize int) LogQueryView {
 	end := min(start+pageSize, len(s.rows))
 	rows := append([]LogQueryRow(nil), s.rows[start:end]...)
 	startedAt := s.startedAt
+	rangeMode := ""
+	if s.criteria.queryType == queryTypeCoordinate {
+		rangeMode = "box"
+		if s.criteria.radius != nil {
+			rangeMode = "radius"
+		}
+	}
 	return LogQueryView{
+		RangeMode:     rangeMode,
+		Radius:        s.criteria.radius,
 		JobID:         s.jobID,
 		ServerID:      s.serverID,
 		ServerName:    s.serverName,
@@ -942,4 +1012,29 @@ func ptrFloat(value float64, ok bool) *float64 {
 
 func strconvI64(value int64) string {
 	return strconv.FormatInt(value, 10)
+}
+
+func (s *LogQueryService) Cancel(ctx context.Context, serverID, queryType, jobID string) (LogQueryView, error) {
+	serverID, err := requireLogQueryServer(serverID)
+	if err != nil {
+		return LogQueryView{}, err
+	}
+	queryType, err = normalizeLogQueryType(queryType)
+	if err != nil {
+		return LogQueryView{}, err
+	}
+	s.mu.Lock()
+	state := s.latest[logQueryStateKey(serverID, queryType)]
+	if state == nil {
+		s.mu.Unlock()
+		return LogQueryView{}, auth.NewHTTPError(404, "查询任务不存在")
+	}
+	state.mu.Lock()
+	err = requestQueryCancellation(state.task, state.jobID, jobID, &state.status, &state.message)
+	state.mu.Unlock()
+	s.mu.Unlock()
+	if err != nil {
+		return LogQueryView{}, err
+	}
+	return state.view(1, defaultLogQueryPage), nil
 }

@@ -2,7 +2,7 @@
 import { computed, defineAsyncComponent, onMounted, onUnmounted, ref } from 'vue'
 import { formatReportTimeRange } from './public-report-format.js'
 import { logActionOptions } from './admin/log-action-options.js'
-import { parseCoordinateInput, savedCoordinateInput } from './admin/coordinate-input.js'
+import { parseCoordinateInput, savedCoordinateInput, coordinateRangeOptions, coordinateQueryParameters } from './admin/coordinate-input.js'
 import {
   ArrowLeft,
   ArrowUp,
@@ -146,7 +146,7 @@ const adminLogPageSizeOptions = LOG_QUERY_PAGE_SIZE_OPTIONS.map(value => ({ valu
 const XRAY_ORE_POSITION_PAGE_SIZE_OPTIONS = [50, 100, 200, 500]
 const adminOrePageSizeOptions = XRAY_ORE_POSITION_PAGE_SIZE_OPTIONS.map(value => ({ value, label: String(value) }))
 const LOG_SHARE_PAGE_SIZE_OPTIONS = [50, 100, 200]
-const ACTIVE_JOB_STATUSES = ['PENDING', 'RUNNING']
+const ACTIVE_JOB_STATUSES = ['PENDING', 'RUNNING', 'CANCELLING']
 
 const filters = ref({
   serverId: 'all',
@@ -385,6 +385,8 @@ const xrayDetailPagedRareOreRows = computed(() => pagedXrayRows(
 const xrayShareOrePositionOffset = computed(() => (clampPage(xrayShareOrePositionPage.value, xrayShareOrePositionTotalPages.value) - 1) * xrayShareOrePositionPageSize.value)
 const xrayDetailOrePositionOffset = computed(() => (clampPage(xrayDetailOrePositionPage.value, xrayDetailOrePositionTotalPages.value) - 1) * xrayDetailOrePositionPageSize.value)
 const xrayDetailResult = computed(() => xrayAnalysisResultFor(logQueryServerId.value) || null)
+const logQueryCancelRequests = ref({})
+const selectedLogQueryCancelling = computed(() => selectedLogFeatureResult.value?.status === 'CANCELLING' || Boolean(logQueryCancelRequests.value[logQueryStateKey(logQueryServerId.value, logQueryMode.value)]))
 const selectedLogQueryRunning = computed(() => isActiveJob(selectedLogFeatureResult.value))
 const selectedLogFeatureHasResult = computed(() => {
   const status = selectedLogFeatureResult.value?.status
@@ -1114,6 +1116,11 @@ async function loadLogQueryState(serverId, silent = false, queryType = logQueryM
     })
     logQueryPages.value = { ...logQueryPages.value, [key]: result.page || 1 }
     logQueryPageSizes.value = { ...logQueryPageSizes.value, [key]: result.pageSize || logQueryPageSizes.value[key] || 100 }
+    // Reset once when entering the idle state, not on every status refresh.
+    // A finished query with zero matches still has a result and retains its dates.
+    if (result.status === 'IDLE' && logQueryResults.value[key]?.status !== 'IDLE') {
+      resetLogQueryDates(serverId, queryType)
+    }
     logQueryResults.value = { ...logQueryResults.value, [key]: result }
   } catch (err) {
     handleApiError(err)
@@ -1193,10 +1200,32 @@ async function clearLogQuery(serverId) {
       const result = await apiDelete('/api/import/log-query-jobs/latest', { serverId, queryType })
       logQueryPages.value = { ...logQueryPages.value, [key]: 1 }
       logQueryResults.value = { ...logQueryResults.value, [key]: result }
+      resetLogQueryDates(serverId, queryType)
     }
     importMessage.value = `${serverNameById(serverId)} ${queryType === LOG_QUERY_TYPE_XRAY ? '分析' : '查询'}结果已清空`
   } catch (err) {
     handleApiError(err)
+  }
+}
+
+async function cancelLogQuery(serverId) {
+  const queryType = logQueryMode.value
+  const key = logQueryStateKey(serverId, queryType)
+  const result = selectedLogFeatureResult.value
+  if (!result?.jobId || !isActiveJob(result) || logQueryCancelRequests.value[key] || result.status === 'CANCELLING') return
+  logQueryCancelRequests.value = { ...logQueryCancelRequests.value, [key]: true }
+  error.value = ''
+  try {
+    const endpoint = queryType === LOG_QUERY_TYPE_XRAY ? 'xray-analysis-jobs' : 'log-query-jobs'
+    const cancelled = await apiPostJson(`/api/import/${endpoint}/cancel`, { serverId, queryType, jobId: result.jobId })
+    if (queryType === LOG_QUERY_TYPE_XRAY) xrayAnalysisResults.value = { ...xrayAnalysisResults.value, [key]: cancelled }
+    else logQueryResults.value = { ...logQueryResults.value, [key]: cancelled }
+    importMessage.value = '已请求取消任务'
+    startLogQueryPollingIfNeeded()
+  } catch (err) {
+    handleApiError(err)
+  } finally {
+    logQueryCancelRequests.value = { ...logQueryCancelRequests.value, [key]: false }
   }
 }
 
@@ -1493,20 +1522,12 @@ function logQueryRequestBody(serverId, queryType) {
 
   const form = logQueryForms.value[serverId] || defaultLogQueryForm()
   saveLogQueryForms()
-  const start = parseCoordinateInput(form.position1)
-  const end = parseCoordinateInput(form.position2)
-  if (!start || !end) throw new Error('请输入完整的起点和终点坐标，例如：34 35 523')
   return {
     serverId,
     queryType,
     fromDate: form.fromDate,
     toDate: form.toDate,
-    x1: start[0],
-    y1: start[1],
-    z1: start[2],
-    x2: end[0],
-    y2: end[1],
-    z2: end[2],
+    ...coordinateQueryParameters(form),
     dimension: form.dimension
   }
 }
@@ -1548,8 +1569,11 @@ function defaultLogQueryForm() {
   return {
     fromDate: today,
     toDate: today,
+    rangeMode: 'box',
     position1: '',
     position2: '',
+    centerPosition: '',
+    radius: 5,
     dimension: ''
   }
 }
@@ -1562,6 +1586,8 @@ function readSavedLogTextQueryForms() {
       defaults[server.serverId] = {
         ...defaults[server.serverId],
         ...(saved[server.serverId] || {}),
+        fromDate: saved[server.serverId]?.fromDate || defaults[server.serverId].fromDate,
+        toDate: saved[server.serverId]?.toDate || defaults[server.serverId].toDate,
         actions: Array.isArray(saved[server.serverId]?.actions) ? saved[server.serverId].actions : (logActionOptions.some(option => option.value && option.value === saved[server.serverId]?.action) ? [saved[server.serverId].action] : [])
       }
     }
@@ -1571,10 +1597,20 @@ function readSavedLogTextQueryForms() {
   return defaults
 }
 
+function resetLogQueryDates(serverId, queryType) {
+  ensureLogFeatureForms(serverId)
+  const forms = queryType === LOG_QUERY_TYPE_PLAYER_KEYWORD ? logTextQueryForms : logQueryForms
+  const today = todayDateInput()
+  forms.value[serverId] = { ...forms.value[serverId], fromDate: today, toDate: today }
+  if (queryType === LOG_QUERY_TYPE_PLAYER_KEYWORD) saveLogTextQueryForms()
+  else saveLogQueryForms()
+}
+
 function defaultLogTextQueryForm() {
+  const today = todayDateInput()
   return {
-    fromDate: '',
-    toDate: '',
+    fromDate: today,
+    toDate: today,
     playerName: '',
     keyword: '',
     actions: []
@@ -1641,6 +1677,18 @@ function todayDateInput() {
   const day = String(date.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
 }
+
+const logQueryRadiusError = computed(() => {
+  const form = logQueryForms.value[logQueryServerId.value]
+  if (form?.rangeMode !== 'radius') return ''
+  const raw = String(form.radius ?? '').trim()
+  if (!raw) return ''
+  const radius = Number(raw)
+  if (!Number.isFinite(radius)) return '请输入有效的半径'
+  if (radius > 200) return '半径不能超过 200 格'
+  if (radius < 0) return '半径不能小于 0 格'
+  return ''
+})
 
 function validateLogCoordinateInput(event) {
   const input = event.target
@@ -2040,10 +2088,16 @@ function isActiveJob(job) {
 }
 
 function logQueryStatusLabel(status) {
+  if (logQueryMode.value === LOG_QUERY_TYPE_XRAY) {
+    const labels = { IDLE: '未分析', PENDING: '等待分析', RUNNING: '分析中', FINISHED: '分析完成', FAILED: '分析失败' }
+    if (labels[status]) return labels[status]
+  }
   const labels = {
     IDLE: '未查询',
     PENDING: '等待查询',
     RUNNING: '查询中',
+    CANCELLING: '取消中',
+    CANCELLED: '已取消',
     FINISHED: '查询完成',
     FINISHED_WITH_ERRORS: '部分文件失败',
     FAILED: '查询失败'
@@ -3844,10 +3898,18 @@ function toggleAllImportFileSelection(checked) {
       <article class="panel wide log-filter-panel">
         <div class="panel-title">
           <h2>{{ serverNameById(logQueryServerId) }} {{ logQueryModeLabel(logQueryMode) }}</h2>
-          <span>{{ logQueryStatusLabel(selectedLogFeatureResult?.status) }}</span>
+          <div class="log-query-task-status">
+            <span>{{ logQueryStatusLabel(selectedLogFeatureResult?.status) }}</span>
+            <button v-if="selectedLogQueryRunning" class="secondary-button" type="button" :disabled="selectedLogQueryCancelling" @click="cancelLogQuery(logQueryServerId)">
+              <CircleSlash :size="16" /><span>{{ selectedLogQueryCancelling ? '取消中…' : '取消任务' }}</span>
+            </button>
+          </div>
         </div>
 
         <form v-if="logQueryMode === LOG_QUERY_TYPE_COORDINATE" :key="logQueryServerId" class="log-query-form log-coordinate-form" @submit.prevent="startLogQuery(logQueryServerId)">
+          <div class="log-coordinate-mode" role="group" aria-label="坐标查询范围方式">
+            <button v-for="option in coordinateRangeOptions" :key="option.value" type="button" :aria-pressed="logQueryForms[logQueryServerId].rangeMode === option.value" :class="{ active: logQueryForms[logQueryServerId].rangeMode === option.value }" @click="logQueryForms[logQueryServerId].rangeMode = option.value; saveLogQueryForms()">{{ option.label }}</button>
+          </div>
           <label>
             <span>开始日期</span>
             <input v-model="logQueryForms[logQueryServerId].fromDate" type="date" required @change="saveLogQueryForms" />
@@ -3856,18 +3918,31 @@ function toggleAllImportFileSelection(checked) {
             <span>结束日期</span>
             <input v-model="logQueryForms[logQueryServerId].toDate" type="date" required @change="saveLogQueryForms" />
           </label>
-          <label>
+          <label class="log-coordinate-dimension">
             <span>维度</span>
             <input v-model.trim="logQueryForms[logQueryServerId].dimension" type="text" placeholder="主世界/下界/末地，留空不限" @change="saveLogQueryForms" />
           </label>
-          <label>
-            <span>交互坐标范围起点</span>
-            <input v-model="logQueryForms[logQueryServerId].position1" type="text" placeholder="X Y Z，例如：34 35 523" required @input="validateLogCoordinateInput" @change="saveLogQueryForms" />
-          </label>
-          <label>
-            <span>交互坐标范围终点</span>
-            <input v-model="logQueryForms[logQueryServerId].position2" type="text" placeholder="X Y Z，例如：40 40 530" required @input="validateLogCoordinateInput" @change="saveLogQueryForms" />
-          </label>
+          <template v-if="logQueryForms[logQueryServerId].rangeMode === 'radius'">
+            <label>
+              <span>中心交互坐标</span>
+              <input key="radius-center" v-model="logQueryForms[logQueryServerId].centerPosition" type="text" placeholder="X Y Z，例如：34 35 523" required @input="validateLogCoordinateInput" @change="saveLogQueryForms" />
+            </label>
+            <label>
+              <span>半径（格）</span>
+              <input v-model="logQueryForms[logQueryServerId].radius" type="number" min="0" max="200" step="any" placeholder="例如：5" required :aria-invalid="Boolean(logQueryRadiusError)" :aria-describedby="logQueryRadiusError ? 'log-query-radius-error' : undefined" @change="saveLogQueryForms" />
+              <small v-if="logQueryRadiusError" id="log-query-radius-error" class="log-query-field-error" role="status">{{ logQueryRadiusError }}</small>
+            </label>
+          </template>
+          <template v-else>
+            <label>
+              <span>交互坐标范围起点</span>
+              <input v-model="logQueryForms[logQueryServerId].position1" type="text" placeholder="X Y Z，例如：34 35 523" required @input="validateLogCoordinateInput" @change="saveLogQueryForms" />
+            </label>
+            <label>
+              <span>交互坐标范围终点</span>
+              <input v-model="logQueryForms[logQueryServerId].position2" type="text" placeholder="X Y Z，例如：40 40 530" required @input="validateLogCoordinateInput" @change="saveLogQueryForms" />
+            </label>
+          </template>
           <div class="log-query-actions">
             <button class="primary-button" type="submit" :disabled="selectedLogQueryRunning || selectedLogQueryLoading">
               <Search :size="18" />
@@ -3968,7 +4043,7 @@ function toggleAllImportFileSelection(checked) {
           <span>{{ selectedLogFeatureResult?.message || (logQueryMode === LOG_QUERY_TYPE_XRAY ? '还没有分析记录' : '还没有查询记录') }}</span>
         </div>
         <p v-if="selectedLogQueryRunning" class="settings-hint">
-          正在扫描 {{ selectedLogFeatureResult?.currentFile || 'CSV 文件' }}，关掉页面也可以稍后回来查看结果。
+          {{ selectedLogQueryCancelling ? '正在停止任务并释放资源…' : `正在扫描 ${selectedLogFeatureResult?.currentFile || 'CSV 文件'}，关掉页面也可以稍后回来查看结果。` }}
         </p>
         <template v-if="logQueryMode === LOG_QUERY_TYPE_XRAY">
           <div class="table-toolbar">
