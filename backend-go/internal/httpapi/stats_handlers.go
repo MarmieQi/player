@@ -217,3 +217,8 @@ func queryOptionalFloat(w http.ResponseWriter, r *http.Request, key string, fall
 	}
 	return queryFloat(w, r, key)
 }
+
+func (s *Server) playerSuggestions(w http.ResponseWriter, r *http.Request) {
+	result, err := s.statsService.PlayerSuggestions(r.Context(), r.URL.Query().Get("serverId"), r.URL.Query().Get("q"))
+	s.writeServiceResult(w, result, err)
+}

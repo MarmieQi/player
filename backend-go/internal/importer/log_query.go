@@ -44,6 +44,7 @@ type LogQueryRequest struct {
 	PlayerName string   `json:"playerName"`
 	Keyword    string   `json:"keyword"`
 	Action     string   `json:"action"`
+	Actions    []string `json:"actions"`
 }
 
 type LogQueryRow struct {
@@ -431,6 +432,17 @@ func (s *LogQueryService) validateCriteria(request LogQueryRequest) (logQueryCri
 		keyword:    strings.TrimSpace(request.Keyword),
 		action:     strings.TrimSpace(request.Action),
 	}
+	if len(request.Actions) > 32 {
+		return logQueryCriteria{}, auth.NewHTTPError(400, "行为选项过多")
+	}
+	for _, action := range request.Actions {
+		if action = strings.TrimSpace(action); action != "" {
+			if criteria.actions == nil {
+				criteria.actions = make(map[string]struct{}, len(request.Actions))
+			}
+			criteria.actions[action] = struct{}{}
+		}
+	}
 	if queryType == queryTypePlayerKeyword {
 		return criteria, nil
 	}
@@ -480,6 +492,7 @@ type logQueryCriteria struct {
 	playerName string
 	keyword    string
 	action     string
+	actions    map[string]struct{}
 	radius     *float64
 }
 
@@ -503,7 +516,11 @@ func (c logQueryCriteria) includesDate(target time.Time) bool {
 
 func (c logQueryCriteria) matches(columns []string) bool {
 	if c.queryType == queryTypePlayerKeyword {
-		if c.action != "" && !containsFold(valueAt(columns, 3), c.action) {
+		if len(c.actions) > 0 {
+			if _, ok := c.actions[valueAt(columns, 3)]; !ok {
+				return false
+			}
+		} else if c.action != "" && !containsFold(valueAt(columns, 3), c.action) {
 			return false
 		}
 		if c.playerName != "" && !strings.EqualFold(valueAt(columns, 2), c.playerName) {

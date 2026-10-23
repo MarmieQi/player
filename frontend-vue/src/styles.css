@@ -1458,8 +1458,7 @@ h2 {
   gap: 12px;
 }
 
-.log-query-form label,
-.coordinate-group {
+.log-query-form label {
   min-width: 0;
   display: grid;
   gap: 6px;
@@ -1518,14 +1517,6 @@ h2 {
   background: #fff;
   color: #17202a;
   font-weight: 800;
-}
-
-.coordinate-group {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.coordinate-group span {
-  grid-column: 1 / -1;
 }
 
 .log-query-actions {
@@ -1743,8 +1734,25 @@ h2 {
 }
 
 .table-wrap .log-query-table {
-  min-width: 1380px;
+  min-width: 0;
+  table-layout: fixed;
 }
+
+.log-query-table th,
+.log-query-table td {
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  vertical-align: top;
+}
+
+.log-query-table .path-cell {
+  white-space: nowrap;
+}
+
+.admin-log-results { container: log-results / inline-size; }
+
+
 
 table {
   width: 100%;
@@ -2093,6 +2101,69 @@ th {
 
 .log-query-card-list {
   display: none;
+}
+
+.log-query-card {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #dbe4ee;
+  border-radius: 7px;
+  background: #fff;
+  color: #17202a;
+  text-align: left;
+  cursor: pointer;
+}
+
+.log-query-card:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.log-query-card-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.log-query-card-head strong,
+.log-query-card-player,
+.log-query-card-coord,
+.log-query-card-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-query-card-head span,
+.log-query-card-coord {
+  color: #637083;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.log-query-card-player {
+  font-weight: 900;
+}
+
+.log-query-card-detail {
+  color: #637083;
+}
+
+.log-query-card-empty {
+  margin: 0;
+}
+
+
+
+@container log-results (max-width: 850px) {
+  .log-query-table-wrap { display: none; }
+  .log-query-card-list { display: grid; gap: 10px; }
 }
 
 .log-detail-backdrop {
@@ -2711,62 +2782,6 @@ th {
     gap: 10px;
   }
 
-  .log-query-card {
-    width: 100%;
-    min-width: 0;
-    display: grid;
-    gap: 8px;
-    padding: 12px;
-    border: 1px solid #dbe4ee;
-    border-radius: 7px;
-    background: #fff;
-    color: #17202a;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .log-query-card:focus-visible {
-    outline: 2px solid #2563eb;
-    outline-offset: 2px;
-  }
-
-  .log-query-card-head {
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-  }
-
-  .log-query-card-head strong,
-  .log-query-card-player,
-  .log-query-card-coord,
-  .log-query-card-detail {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .log-query-card-head span,
-  .log-query-card-coord {
-    color: #637083;
-    font-size: 13px;
-    font-weight: 800;
-  }
-
-  .log-query-card-player {
-    font-weight: 900;
-  }
-
-  .log-query-card-detail {
-    color: #637083;
-  }
-
-  .log-query-card-empty {
-    margin: 0;
-  }
-
   .log-detail-backdrop {
     align-items: stretch;
     place-items: stretch;
@@ -3274,10 +3289,6 @@ th {
 
   .log-query-form {
     gap: 10px;
-  }
-
-  .coordinate-group {
-    gap: 8px;
   }
 
   .bulk-actions {

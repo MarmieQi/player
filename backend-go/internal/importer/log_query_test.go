@@ -5,6 +5,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"player-stats-backend-go/internal/config"
 )
 
 func TestLogQueryShouldScanFileRequiresParseableDateLikeJava(t *testing.T) {
@@ -357,5 +359,40 @@ func TestPublicLogDateRangeUsesLatestLocalLogFile(t *testing.T) {
 	}
 	if got, want := to.Format("2006-01-02"), "2026-05-29"; got != want {
 		t.Fatalf("to = %s, want %s", got, want)
+	}
+}
+
+func TestLogQuerySelectedActions(t *testing.T) {
+	service := &LogQueryService{importer: &Service{cfg: config.Config{Location: time.UTC}}}
+	row := []string{"2026-10-23", "03:29:28", "Lcmnn", "从容器取出", "65", "64", "55", "主世界", "66", "64", "56", "主世界", "minecraft:lava_bucket", "x1"}
+	for _, tc := range []struct {
+		name            string
+		actions         []string
+		player, keyword string
+		want            bool
+	}{
+		{name: "all", want: true},
+		{name: "single", actions: []string{"从容器取出"}, want: true},
+		{name: "multiple", actions: []string{"使用桶放置", "从容器取出"}, want: true},
+		{name: "different", actions: []string{"使用桶放置"}, want: false},
+		{name: "exact match", actions: []string{"容器"}, want: false},
+		{name: "trim and duplicate", actions: []string{" 从容器取出 ", "从容器取出", ""}, want: true},
+		{name: "player conjunction", actions: []string{"从容器取出"}, player: "Other", want: false},
+		{name: "keyword conjunction", actions: []string{"从容器取出"}, keyword: "water_bucket", want: false},
+		{name: "combined", actions: []string{"从容器取出"}, player: "Lcmnn", keyword: "lava_bucket", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			criteria, err := service.validateCriteria(LogQueryRequest{ServerID: "main", QueryType: queryTypePlayerKeyword, Actions: tc.actions, PlayerName: tc.player, Keyword: tc.keyword})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := criteria.matches(row); got != tc.want {
+				t.Fatalf("match = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	legacy, err := service.validateCriteria(LogQueryRequest{ServerID: "main", QueryType: queryTypePlayerKeyword, Action: "容器"})
+	if err != nil || !legacy.matches(row) {
+		t.Fatalf("existing action API changed: %v", err)
 	}
 }

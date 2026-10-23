@@ -90,7 +90,7 @@
 .admin-workspace :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea) { min-width: 0; max-width: 100%; border-color: #d9e2eb; border-radius: 7px; color: #34485e; }
 .admin-workspace .settings-form label, .admin-workspace .settings-form label > span { color: #46556a; }
 .admin-workspace .settings-form { padding: 8px 0; }
-.admin-workspace .settings-form label, .admin-workspace .log-query-form label, .admin-workspace .coordinate-group { font-size: 13px; font-weight: 500; color: #46556a; }
+.admin-workspace .settings-form label, .admin-workspace .log-query-form label { font-size: 13px; font-weight: 500; color: #46556a; }
 .admin-workspace .settings-form input, .admin-workspace .log-query-form input, .admin-workspace .settings-form select { font-size: 14px; font-weight: 400; }
 .admin-workspace .settings-hint { font-size: 13px; line-height: 1.65; color: var(--admin-muted); }
 .admin-workspace .log-query-page { position: relative; }
@@ -206,7 +206,6 @@
   .admin-workspace .server-tabs button svg { display: none; }
   .admin-workspace .settings-form, .admin-workspace .log-query-form { grid-template-columns: minmax(0, 1fr); }
   .admin-workspace .settings-form .wide-field { grid-column: auto; }
-  .admin-workspace .coordinate-group { min-width: 0; }
   .admin-workspace .bulk-actions { flex-wrap: wrap; }
   .admin-workspace .result-page { gap: 14px; }
   .admin-workspace :is(button, input, select) { min-height: 40px; }
@@ -215,3 +214,22 @@
 @media (prefers-reduced-motion: reduce) {
   .admin-workspace .admin-sidebar { transition: none; }
 }
+
+/* Keep filter inputs, selected behaviors and query actions on separate rows. */
+.admin-workspace .log-combined-form { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.admin-workspace .log-combined-form input { height: 42px; }
+.log-combined-footer { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; padding-top: 4px; }
+.log-combined-footer .log-query-actions { grid-column: auto; flex-wrap: wrap; justify-content: flex-start; margin: 0; }
+.admin-workspace .log-combined-footer .log-query-actions button { min-height: 42px; }
+@media (max-width: 1199px) {
+  .admin-workspace .log-combined-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 767px) {
+  .log-combined-footer { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+}
+@media (max-width: 479px) {
+  .admin-workspace .log-combined-form { grid-template-columns: minmax(0, 1fr); }
+  .log-combined-footer .log-query-actions button { flex: 1; }
+}
+
+.admin-workspace .log-filter-panel { min-height: 0; }

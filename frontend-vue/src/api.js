@@ -20,7 +20,8 @@ export async function apiGet(path, params = {}, options = {}) {
     .forEach(([key, value]) => url.searchParams.set(key, value))
 
   const response = await fetch(url, {
-    headers: authHeaders({}, options)
+    headers: authHeaders({}, options),
+    signal: options.signal
   })
   return parseResponse(response)
 }

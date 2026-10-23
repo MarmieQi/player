@@ -1,6 +1,8 @@
 <script setup>
 import { computed, defineAsyncComponent, onMounted, onUnmounted, ref } from 'vue'
 import { formatReportTimeRange } from './public-report-format.js'
+import { logActionOptions } from './admin/log-action-options.js'
+import { parseCoordinateInput, savedCoordinateInput } from './admin/coordinate-input.js'
 import {
   ArrowLeft,
   ArrowUp,
@@ -35,7 +37,7 @@ import {
   UserRound
 } from 'lucide-vue-next'
 import { apiDelete, apiGet, apiPost, apiPostJson, apiPutJson, clearAuthToken, getAuthToken, setAuthToken } from './api'
-import { isBucketLogAction, logQueryActionDisplay, logQueryDetailDisplay, logQuerySummaryDetailText, logShareActionClass } from './log-presentation'
+import { isBucketLogAction, logQueryActionDisplay, logQuerySummaryDetailText, logShareActionClass } from './log-presentation'
 import { adminNavigationId } from './admin/navigation'
 import { LOG_QUERY_TYPE_COORDINATE, LOG_QUERY_TYPE_PLAYER_KEYWORD, LOG_QUERY_TYPE_XRAY, normalizeLogQueryMode, logFeatureLocation, parseLogFeatureLocation } from './admin/log-feature-navigation'
 
@@ -43,6 +45,8 @@ const AdminLayout = defineAsyncComponent(() => import('./admin/AdminLayout.vue')
 const PublicReportLayout = defineAsyncComponent(() => import('./components/PublicReportLayout.vue'))
 const PublicMetricGrid = defineAsyncComponent(() => import('./components/PublicMetricGrid.vue'))
 const AdminLogin = defineAsyncComponent(() => import('./admin/AdminLogin.vue'))
+const PlayerNameAutocomplete = defineAsyncComponent(() => import('./admin/PlayerNameAutocomplete.vue'))
+const LogActionFilter = defineAsyncComponent(() => import('./admin/LogActionFilter.vue'))
 const AdminSelect = defineAsyncComponent(() => import('./admin/AdminSelect.vue'))
 const LogQueryTabs = defineAsyncComponent(() => import('./admin/LogQueryTabs.vue'))
 
@@ -1474,7 +1478,7 @@ function logQueryRequestBody(serverId, queryType) {
     const form = logTextQueryForms.value[serverId] || defaultLogTextQueryForm()
     const playerName = (form.playerName || '').trim()
     const keyword = (form.keyword || '').trim()
-    const action = (form.action || '').trim()
+    const actions = Array.isArray(form.actions) ? form.actions : []
     saveLogTextQueryForms()
     return {
       serverId,
@@ -1483,23 +1487,26 @@ function logQueryRequestBody(serverId, queryType) {
       toDate: form.toDate,
       playerName,
       keyword,
-      action
+      actions
     }
   }
 
   const form = logQueryForms.value[serverId] || defaultLogQueryForm()
   saveLogQueryForms()
+  const start = parseCoordinateInput(form.position1)
+  const end = parseCoordinateInput(form.position2)
+  if (!start || !end) throw new Error('请输入完整的起点和终点坐标，例如：34 35 523')
   return {
     serverId,
     queryType,
     fromDate: form.fromDate,
     toDate: form.toDate,
-    x1: numberOrNull(form.x1),
-    y1: numberOrNull(form.y1),
-    z1: numberOrNull(form.z1),
-    x2: numberOrNull(form.x2),
-    y2: numberOrNull(form.y2),
-    z2: numberOrNull(form.z2),
+    x1: start[0],
+    y1: start[1],
+    z1: start[2],
+    x2: end[0],
+    y2: end[1],
+    z2: end[2],
     dimension: form.dimension
   }
 }
@@ -1524,6 +1531,8 @@ function readSavedLogQueryForms() {
       defaults[server.serverId] = {
         ...defaults[server.serverId],
         ...(saved[server.serverId] || {}),
+        position1: savedCoordinateInput(saved[server.serverId], 1),
+        position2: savedCoordinateInput(saved[server.serverId], 2),
         fromDate: saved[server.serverId]?.fromDate || saved[server.serverId]?.date || defaults[server.serverId].fromDate,
         toDate: saved[server.serverId]?.toDate || saved[server.serverId]?.date || defaults[server.serverId].toDate
       }
@@ -1539,12 +1548,8 @@ function defaultLogQueryForm() {
   return {
     fromDate: today,
     toDate: today,
-    x1: '',
-    y1: '',
-    z1: '',
-    x2: '',
-    y2: '',
-    z2: '',
+    position1: '',
+    position2: '',
     dimension: ''
   }
 }
@@ -1556,7 +1561,8 @@ function readSavedLogTextQueryForms() {
     for (const server of serverOptions.value) {
       defaults[server.serverId] = {
         ...defaults[server.serverId],
-        ...(saved[server.serverId] || {})
+        ...(saved[server.serverId] || {}),
+        actions: Array.isArray(saved[server.serverId]?.actions) ? saved[server.serverId].actions : (logActionOptions.some(option => option.value && option.value === saved[server.serverId]?.action) ? [saved[server.serverId].action] : [])
       }
     }
   } catch (err) {
@@ -1571,7 +1577,7 @@ function defaultLogTextQueryForm() {
     toDate: '',
     playerName: '',
     keyword: '',
-    action: ''
+    actions: []
   }
 }
 
@@ -1636,10 +1642,9 @@ function todayDateInput() {
   return `${year}-${month}-${day}`
 }
 
-function numberOrNull(value) {
-  if (value === null || value === undefined || value === '') return null
-  const number = Number(value)
-  return Number.isFinite(number) ? number : null
+function validateLogCoordinateInput(event) {
+  const input = event.target
+  input.setCustomValidity(!input.value || parseCoordinateInput(input.value) ? '' : '请输入三个坐标，例如：34 35 523（支持空格或逗号分隔）')
 }
 
 function durationText(minutes) {
@@ -3833,17 +3838,16 @@ function toggleAllImportFileSelection(checked) {
           <small v-else-if="logQueryMode === LOG_QUERY_TYPE_XRAY && xrayAnalysisResultFor(server.serverId)?.maxRiskScore">
             {{ xrayAnalysisResultFor(server.serverId).maxRiskScore }}分
           </small>
-          <small v-else-if="logFeatureResultFor(server.serverId)?.matchedRows">{{ formatNumber(logFeatureResultFor(server.serverId).matchedRows) }}</small>
         </button>
       </section>
 
-      <article class="panel wide">
+      <article class="panel wide log-filter-panel">
         <div class="panel-title">
           <h2>{{ serverNameById(logQueryServerId) }} {{ logQueryModeLabel(logQueryMode) }}</h2>
           <span>{{ logQueryStatusLabel(selectedLogFeatureResult?.status) }}</span>
         </div>
 
-        <form v-if="logQueryMode === LOG_QUERY_TYPE_COORDINATE" class="log-query-form log-coordinate-form" @submit.prevent="startLogQuery(logQueryServerId)">
+        <form v-if="logQueryMode === LOG_QUERY_TYPE_COORDINATE" :key="logQueryServerId" class="log-query-form log-coordinate-form" @submit.prevent="startLogQuery(logQueryServerId)">
           <label>
             <span>开始日期</span>
             <input v-model="logQueryForms[logQueryServerId].fromDate" type="date" required @change="saveLogQueryForms" />
@@ -3856,18 +3860,14 @@ function toggleAllImportFileSelection(checked) {
             <span>维度</span>
             <input v-model.trim="logQueryForms[logQueryServerId].dimension" type="text" placeholder="主世界/下界/末地，留空不限" @change="saveLogQueryForms" />
           </label>
-          <div class="coordinate-group">
+          <label>
             <span>交互坐标范围起点</span>
-            <input v-model="logQueryForms[logQueryServerId].x1" type="number" step="any" placeholder="X" required @change="saveLogQueryForms" />
-            <input v-model="logQueryForms[logQueryServerId].y1" type="number" step="any" placeholder="Y" required @change="saveLogQueryForms" />
-            <input v-model="logQueryForms[logQueryServerId].z1" type="number" step="any" placeholder="Z" required @change="saveLogQueryForms" />
-          </div>
-          <div class="coordinate-group">
+            <input v-model="logQueryForms[logQueryServerId].position1" type="text" placeholder="X Y Z，例如：34 35 523" required @input="validateLogCoordinateInput" @change="saveLogQueryForms" />
+          </label>
+          <label>
             <span>交互坐标范围终点</span>
-            <input v-model="logQueryForms[logQueryServerId].x2" type="number" step="any" placeholder="X" required @change="saveLogQueryForms" />
-            <input v-model="logQueryForms[logQueryServerId].y2" type="number" step="any" placeholder="Y" required @change="saveLogQueryForms" />
-            <input v-model="logQueryForms[logQueryServerId].z2" type="number" step="any" placeholder="Z" required @change="saveLogQueryForms" />
-          </div>
+            <input v-model="logQueryForms[logQueryServerId].position2" type="text" placeholder="X Y Z，例如：40 40 530" required @input="validateLogCoordinateInput" @change="saveLogQueryForms" />
+          </label>
           <div class="log-query-actions">
             <button class="primary-button" type="submit" :disabled="selectedLogQueryRunning || selectedLogQueryLoading">
               <Search :size="18" />
@@ -3880,7 +3880,7 @@ function toggleAllImportFileSelection(checked) {
           </div>
         </form>
 
-        <form v-else-if="logQueryMode === LOG_QUERY_TYPE_PLAYER_KEYWORD" class="log-query-form" @submit.prevent="startLogQuery(logQueryServerId)">
+        <form v-else-if="logQueryMode === LOG_QUERY_TYPE_PLAYER_KEYWORD" class="log-query-form log-combined-form" @submit.prevent="startLogQuery(logQueryServerId)">
           <label>
             <span>开始日期（留空不限）</span>
             <input v-model="logTextQueryForms[logQueryServerId].fromDate" type="date" @change="saveLogTextQueryForms" />
@@ -3889,27 +3889,23 @@ function toggleAllImportFileSelection(checked) {
             <span>结束日期（留空不限）</span>
             <input v-model="logTextQueryForms[logQueryServerId].toDate" type="date" @change="saveLogTextQueryForms" />
           </label>
-          <label>
-            <span>玩家名</span>
-            <input v-model.trim="logTextQueryForms[logQueryServerId].playerName" type="text" placeholder="玩家名" @change="saveLogTextQueryForms" />
-          </label>
+          <PlayerNameAutocomplete v-model="logTextQueryForms[logQueryServerId].playerName" :server-id="logQueryServerId" @change="saveLogTextQueryForms" />
           <label>
             <span>关键字</span>
             <input v-model.trim="logTextQueryForms[logQueryServerId].keyword" type="text" placeholder="详细信息关键字" @change="saveLogTextQueryForms" />
           </label>
-          <label>
-            <span>行为</span>
-            <input v-model.trim="logTextQueryForms[logQueryServerId].action" type="text" placeholder="行为筛选" @change="saveLogTextQueryForms" />
-          </label>
-          <div class="log-query-actions">
-            <button class="primary-button" type="submit" :disabled="selectedLogQueryRunning || selectedLogQueryLoading">
-              <Search :size="18" />
-              <span>{{ selectedLogQueryRunning ? '查询中' : `开始查询 ${serverNameById(logQueryServerId)}` }}</span>
-            </button>
-            <button class="secondary-button" type="button" :disabled="selectedLogQueryRunning" @click="clearLogQuery(logQueryServerId)">
-              <Trash2 :size="18" />
-              <span>清空结果</span>
-            </button>
+          <div class="log-combined-footer">
+            <LogActionFilter v-model="logTextQueryForms[logQueryServerId].actions" @update:model-value="saveLogTextQueryForms" />
+            <div class="log-query-actions">
+              <button class="primary-button" type="submit" :disabled="selectedLogQueryRunning || selectedLogQueryLoading">
+                <Search :size="18" />
+                <span>{{ selectedLogQueryRunning ? '查询中' : `开始查询 ${serverNameById(logQueryServerId)}` }}</span>
+              </button>
+              <button class="secondary-button" type="button" :disabled="selectedLogQueryRunning" @click="clearLogQuery(logQueryServerId)">
+                <Trash2 :size="18" />
+                <span>清空结果</span>
+              </button>
+            </div>
           </div>
         </form>
 
@@ -3966,7 +3962,7 @@ function toggleAllImportFileSelection(checked) {
         </article>
       </section>
 
-      <article v-if="selectedLogFeatureHasResult" class="panel wide">
+      <article v-if="selectedLogFeatureHasResult" class="panel wide admin-log-results">
         <div class="panel-title">
           <h2>{{ logQueryMode === LOG_QUERY_TYPE_XRAY ? '分析结果' : '查询结果' }}</h2>
           <span>{{ selectedLogFeatureResult?.message || (logQueryMode === LOG_QUERY_TYPE_XRAY ? '还没有分析记录' : '还没有查询记录') }}</span>
@@ -4060,6 +4056,10 @@ function toggleAllImportFileSelection(checked) {
         </div>
         <div class="table-wrap log-query-table-wrap">
           <table class="log-query-table">
+            <colgroup>
+              <col style="width: 14%" /><col style="width: 5%" /><col style="width: 14%" /><col style="width: 11%" />
+              <col style="width: 12%" /><col style="width: 14%" /><col style="width: 14%" /><col style="width: 16%" />
+            </colgroup>
             <thead>
               <tr>
                 <th>文件</th>
@@ -4069,8 +4069,7 @@ function toggleAllImportFileSelection(checked) {
                 <th>行为</th>
                 <th>玩家坐标</th>
                 <th>交互坐标</th>
-                <th>详细1</th>
-                <th>详细2</th>
+                <th>详情</th>
               </tr>
             </thead>
             <tbody>
@@ -4090,11 +4089,10 @@ function toggleAllImportFileSelection(checked) {
                 <td>{{ logQueryActionDisplay(row.action) }}</td>
                 <td>{{ logQueryCoordinateText(row.x, row.y, row.z, row.dimension) }}</td>
                 <td>{{ logQueryInteractionCoordinateText(row) }}</td>
-                <td class="message-cell" :title="row.detail1 || ''">{{ logQueryDetailDisplay(row, 'detail1') }}</td>
-                <td class="message-cell" :title="row.detail2 || ''">{{ logQueryDetailDisplay(row, 'detail2') }}</td>
+                <td class="message-cell">{{ logQuerySummaryDetailText(row) }}</td>
               </tr>
               <tr v-if="!selectedLogQueryRows.length">
-                <td colspan="9" class="empty">
+                <td colspan="8" class="empty">
                   {{ selectedLogQueryRunning ? '正在查询，请稍等' : (selectedLogQueryResult?.message || '还没有查询记录') }}
                 </td>
               </tr>
