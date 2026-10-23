@@ -4,7 +4,7 @@ import { Search, UserRound, ArrowUpLeft } from 'lucide-vue-next'
 import { apiGet } from '../api.js'
 import { createPlayerSuggestionSearch } from './player-suggestions.js'
 
-const props = defineProps({ modelValue: { type: String, default: '' }, serverId: { type: String, required: true } })
+const props = defineProps({ modelValue: { type: String, default: '' }, serverId: { type: String, required: true }, placeholder: { type: String, default: '输入玩家名搜索' } })
 const emit = defineEmits(['update:modelValue', 'change'])
 const id = useId()
 const root = ref(null)
@@ -47,7 +47,7 @@ onUnmounted(() => { suggestions.cancel(); document.removeEventListener('pointerd
 <template>
   <div ref="root" class="player-name-autocomplete">
     <label :for="id">玩家名</label>
-    <div class="player-picker-input"><input :id="id" :value="modelValue" type="text" placeholder="输入玩家名搜索" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" :aria-expanded="Boolean(open && modelValue.trim())" :aria-controls="`${id}-names`" :aria-activedescendant="active >= 0 && open ? `${id}-name-${active}` : undefined" @input="input" @focus="focus" @blur="close" @keydown="keys" @change="emit('change')" @compositionstart="composing = true; close()" @compositionend="composing = false; input($event)" /><Search :size="15" aria-hidden="true" /></div>
+    <div class="player-picker-input"><input :id="id" :value="modelValue" type="text" :placeholder="placeholder" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" :aria-expanded="Boolean(open && modelValue.trim())" :aria-controls="`${id}-names`" :aria-activedescendant="active >= 0 && open ? `${id}-name-${active}` : undefined" @input="input" @focus="focus" @blur="close" @keydown="keys" @change="emit('change')" @compositionstart="composing = true; close()" @compositionend="composing = false; input($event)" /><Search :size="15" aria-hidden="true" /></div>
     <div v-if="open && modelValue.trim()" class="player-picker-menu">
       <div class="player-picker-caption">匹配玩家</div>
       <div :id="`${id}-names`" role="listbox" aria-label="匹配的玩家" :aria-busy="state.loading">

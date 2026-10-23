@@ -6,6 +6,7 @@ const props = defineProps({
   modelValue: [String, Number],
   options: { type: Array, required: true },
   label: { type: String, required: true },
+  caption: { type: String, default: '' },
   disabled: Boolean
 })
 const emit = defineEmits(['update:modelValue'])
@@ -105,7 +106,7 @@ onUnmounted(removeListeners)
 <template>
   <span class="admin-select-root">
     <button ref="trigger" type="button" role="combobox" class="admin-select-trigger" :class="{ 'is-open': open }" :aria-label="label" aria-haspopup="listbox" :aria-expanded="open" :aria-controls="`${id}-menu`" :aria-activedescendant="open ? `${id}-option-${active}` : undefined" :disabled="disabled" @click="open ? close() : reveal()" @keydown="onKey">
-      <span>{{ selected?.label ?? '请选择' }}</span><ChevronDown :size="15" aria-hidden="true" />
+      <span class="admin-select-value"><small v-if="caption" class="admin-select-caption">{{ caption }}</small><span>{{ selected?.label ?? '请选择' }}</span></span><ChevronDown :size="15" aria-hidden="true" />
     </button>
     <Teleport to="body">
       <div v-if="open" :id="`${id}-menu`" ref="menu" role="listbox" :aria-label="label" class="admin-select-menu" :style="menuStyle">
@@ -120,6 +121,9 @@ onUnmounted(removeListeners)
 <style scoped>
 .admin-select-root { display: inline-flex; min-width: 76px; vertical-align: middle; }
 .admin-select-trigger { display: inline-flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; min-height: 38px; margin: 0; padding: 0 11px; border: 1px solid #d9e2eb; border-radius: 8px; background: #fff; color: #34445b; font: inherit; font-size: 14px; font-weight: 400; line-height: 1.4; cursor: pointer; white-space: nowrap; }
+.admin-select-trigger > span { flex: 1; min-width: 0; text-align: center; }
+.admin-select-value:has(.admin-select-caption) { display: flex; align-items: center; gap: 12px; text-align: left; }
+.admin-select-caption { color: #7b899b; font: inherit; }
 .admin-select-trigger svg { color: #7b899b; flex-shrink: 0; }
 .admin-select-trigger:hover:not(:disabled) { border-color: #b8c5d5; }
 .admin-select-trigger:focus-visible, .admin-select-trigger.is-open { outline: none; border-color: var(--admin-accent, #465fc9); box-shadow: 0 0 0 3px var(--admin-accent-shadow, #526bd41a); }

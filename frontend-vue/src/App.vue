@@ -1392,10 +1392,6 @@ function xrayAnalysisResultFor(serverId) {
   return xrayAnalysisResults.value[logQueryStateKey(serverId, LOG_QUERY_TYPE_XRAY)]
 }
 
-function logFeatureResultFor(serverId, queryType = logQueryMode.value) {
-  return queryType === LOG_QUERY_TYPE_XRAY ? xrayAnalysisResultFor(serverId) : logQueryResultFor(serverId, queryType)
-}
-
 function logQueryModeLabel(queryType = logQueryMode.value) {
   if (queryType === LOG_QUERY_TYPE_PLAYER_KEYWORD) return '综合筛选'
   if (queryType === LOG_QUERY_TYPE_XRAY) return '矿透分析'
@@ -3617,10 +3613,9 @@ function toggleAllImportFileSelection(checked) {
     <section v-else-if="currentView === 'syncPage'" class="result-page">
       <div class="topbar">
         <div class="actions">
-          <label class="admin-task-server">
-            <span>服务器</span>
-            <AdminSelect :model-value="filters.serverId" :options="adminServerOptions" label="任务服务器" @update:model-value="openSyncPage" />
-          </label>
+          <div class="admin-server-picker">
+            <AdminSelect :model-value="filters.serverId" :options="adminServerOptions" label="任务服务器" caption="服务器" @update:model-value="openSyncPage" />
+          </div>
           <button class="icon-button ghost" type="button" title="刷新文件对比" :disabled="syncPageLoading || syncJobRunning" @click="loadSyncPageFiles">
             <RefreshCw :size="18" :class="{ spin: syncPageLoading }" />
           </button>
@@ -3738,10 +3733,9 @@ function toggleAllImportFileSelection(checked) {
     <section v-else-if="currentView === 'importPage'" class="result-page">
       <div class="topbar">
         <div class="actions">
-          <label class="admin-task-server">
-            <span>服务器</span>
-            <AdminSelect :model-value="filters.serverId" :options="adminServerOptions" label="任务服务器" @update:model-value="openImportPage" />
-          </label>
+          <div class="admin-server-picker">
+            <AdminSelect :model-value="filters.serverId" :options="adminServerOptions" label="任务服务器" caption="服务器" @update:model-value="openImportPage" />
+          </div>
           <button class="icon-button ghost" type="button" title="刷新文件" :disabled="importPageLoading || importJobRunning" @click="loadImportFiles">
             <RefreshCw :size="18" :class="{ spin: importPageLoading }" />
           </button>
@@ -3865,35 +3859,21 @@ function toggleAllImportFileSelection(checked) {
     </section>
 
     <section v-else-if="currentView === 'logQueryPage' || currentView === 'xrayAnalysisPage'" class="result-page log-query-page" :class="{ 'xray-analysis-page': currentView === 'xrayAnalysisPage' }">
-      <div class="topbar">
-        <div class="actions">
+      <div class="log-query-toolbar">
+        <div class="log-query-toolbar-actions">
+          <div class="admin-server-picker">
+            <AdminSelect :model-value="logQueryServerId" :options="adminServerOptions" label="服务器" caption="服务器" @update:model-value="setLogQueryServer" />
+          </div>
           <button class="icon-button ghost" type="button" :title="currentView === 'xrayAnalysisPage' ? '刷新分析状态' : '刷新查询状态'" :disabled="selectedLogQueryLoading" @click="loadLogFeatureState(logQueryServerId)">
             <RefreshCw :size="18" :class="{ spin: selectedLogQueryLoading || selectedLogQueryRunning }" />
           </button>
         </div>
       </div>
 
-      <p v-if="error" class="notice error">{{ error }}</p>
-      <p v-if="importMessage" class="notice success">{{ importMessage }}</p>
-
       <LogQueryTabs v-if="currentView === 'logQueryPage'" :mode="logQueryMode" @change="setLogQueryMode" />
 
-      <section class="server-tabs compact" :aria-label="currentView === 'xrayAnalysisPage' ? '矿透分析服务器' : '日志查询服务器'">
-        <button
-          v-for="server in serverOptions"
-          :key="server.serverId"
-          type="button"
-          :class="{ active: logQueryServerId === server.serverId }"
-          @click="setLogQueryServer(server.serverId)"
-        >
-          <Search :size="16" />
-          <span>{{ server.serverName }}</span>
-          <small v-if="isActiveJob(logFeatureResultFor(server.serverId))">{{ currentView === 'xrayAnalysisPage' ? '分析中' : '查询中' }}</small>
-          <small v-else-if="logQueryMode === LOG_QUERY_TYPE_XRAY && xrayAnalysisResultFor(server.serverId)?.maxRiskScore">
-            {{ xrayAnalysisResultFor(server.serverId).maxRiskScore }}分
-          </small>
-        </button>
-      </section>
+      <p v-if="error" class="notice error">{{ error }}</p>
+      <p v-if="importMessage" class="notice success">{{ importMessage }}</p>
 
       <article class="panel wide log-filter-panel">
         <div class="panel-title">
@@ -3993,10 +3973,7 @@ function toggleAllImportFileSelection(checked) {
             <span>结束日期</span>
             <input v-model="xrayAnalysisForms[logQueryServerId].toDate" type="date" required @change="saveXrayAnalysisForms" />
           </label>
-          <label>
-            <span>玩家名</span>
-            <input v-model.trim="xrayAnalysisForms[logQueryServerId].playerName" type="text" placeholder="留空分析全部玩家" @change="saveXrayAnalysisForms" />
-          </label>
+          <PlayerNameAutocomplete v-model="xrayAnalysisForms[logQueryServerId].playerName" :server-id="logQueryServerId" placeholder="留空分析全部玩家" @change="saveXrayAnalysisForms" />
           <label>
             <span>维度</span>
             <input v-model.trim="xrayAnalysisForms[logQueryServerId].dimension" type="text" placeholder="主世界/下界，留空不限" @change="saveXrayAnalysisForms" />
