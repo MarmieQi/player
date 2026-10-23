@@ -2108,7 +2108,7 @@ function logQueryStatusLabel(status) {
 function logQueryCoordinateText(x, y, z, dimension) {
   if (!x || x === '-') return '-'
   const dim = dimension && dimension !== '-' ? ` · ${dimension}` : ''
-  return `${x}, ${y}, ${z}${dim}`
+  return `${x} ${y} ${z}${dim}`
 }
 
 function formatCoordValue(value) {
