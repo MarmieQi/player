@@ -1184,51 +1184,6 @@ button:disabled {
   padding: 28px 0 44px;
 }
 
-.login-shell {
-  min-height: 100vh;
-  width: min(100% - 32px, 420px);
-  margin: 0 auto;
-  display: grid;
-  place-items: center;
-  padding: 28px 0;
-}
-
-.login-panel {
-  width: 100%;
-  display: grid;
-  gap: 16px;
-  padding: 26px;
-  background: #fff;
-  border: 1px solid #dfe7ef;
-  border-radius: 8px;
-  box-shadow: 0 16px 42px rgba(35, 47, 61, 0.1);
-}
-
-.login-panel > svg {
-  color: #2563eb;
-}
-
-.login-panel label {
-  display: grid;
-  gap: 7px;
-  color: #637083;
-  font-size: 13px;
-  font-weight: 800;
-}
-
-.login-panel input {
-  height: 42px;
-  border: 1px solid #cfd9e5;
-  border-radius: 7px;
-  padding: 0 11px;
-  background: #fbfcfe;
-  color: #17202a;
-}
-
-.login-panel .primary-button {
-  width: 100%;
-}
-
 .topbar {
   display: flex;
   align-items: center;
@@ -2073,11 +2028,6 @@ th {
 .xray-detail-actions {
   display: flex;
   justify-content: flex-end;
-}
-
-.xray-share-detail {
-  padding: 0;
-  overflow: hidden;
 }
 
 .modal-backdrop {

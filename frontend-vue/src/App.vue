@@ -1,11 +1,13 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref } from 'vue'
+import { formatReportTimeRange } from './public-report-format.js'
 import {
   ArrowLeft,
   ArrowUp,
   Clock,
   Blocks,
   CalendarDays,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   CheckCircle2,
@@ -18,8 +20,6 @@ import {
   FileText,
   Hammer,
   Layers,
-  LockKeyhole,
-  LogOut,
   Play,
   Pickaxe,
   RefreshCw,
@@ -29,7 +29,6 @@ import {
   Eye,
   EyeOff,
   Save,
-  Settings,
   TreePine,
   Trash2,
   XCircle,
@@ -37,6 +36,15 @@ import {
 } from 'lucide-vue-next'
 import { apiDelete, apiGet, apiPost, apiPostJson, apiPutJson, clearAuthToken, getAuthToken, setAuthToken } from './api'
 import { isBucketLogAction, logQueryActionDisplay, logQueryDetailDisplay, logQuerySummaryDetailText, logShareActionClass } from './log-presentation'
+import { adminNavigationId } from './admin/navigation'
+import { LOG_QUERY_TYPE_COORDINATE, LOG_QUERY_TYPE_PLAYER_KEYWORD, LOG_QUERY_TYPE_XRAY, normalizeLogQueryMode, logFeatureLocation, parseLogFeatureLocation } from './admin/log-feature-navigation'
+
+const AdminLayout = defineAsyncComponent(() => import('./admin/AdminLayout.vue'))
+const PublicReportLayout = defineAsyncComponent(() => import('./components/PublicReportLayout.vue'))
+const PublicMetricGrid = defineAsyncComponent(() => import('./components/PublicMetricGrid.vue'))
+const AdminLogin = defineAsyncComponent(() => import('./admin/AdminLogin.vue'))
+const AdminSelect = defineAsyncComponent(() => import('./admin/AdminSelect.vue'))
+const LogQueryTabs = defineAsyncComponent(() => import('./admin/LogQueryTabs.vue'))
 
 const loading = ref(false)
 const authChecked = ref(false)
@@ -69,6 +77,7 @@ const importMessage = ref('')
 const currentAdmin = ref('')
 const currentAdminExpiresAt = ref(null)
 const currentView = ref('dashboard')
+const activeAdminPage = computed(() => adminNavigationId(currentView.value))
 const shareToken = ref('')
 const shareData = ref(null)
 const shareLoading = ref(false)
@@ -97,7 +106,6 @@ const rankingShareError = ref('')
 const selectedRankingShareServerId = ref('')
 const minecraftLaunchNoticeOpen = ref(false)
 const shareNow = ref(Date.now())
-const lastOperation = ref(null)
 const importFiles = ref([])
 const importJob = ref(null)
 const importPageLoading = ref(false)
@@ -129,11 +137,10 @@ const SYNC_JOB_STORAGE_KEY = 'player-stats-last-sync-jobs'
 const LOG_QUERY_FORM_STORAGE_KEY = 'player-stats-log-query-forms'
 const LOG_TEXT_QUERY_FORM_STORAGE_KEY = 'player-stats-log-text-query-forms'
 const LOG_XRAY_ANALYSIS_FORM_STORAGE_KEY = 'player-stats-log-xray-analysis-forms'
-const LOG_QUERY_TYPE_COORDINATE = 'coordinate'
-const LOG_QUERY_TYPE_PLAYER_KEYWORD = 'playerKeyword'
-const LOG_QUERY_TYPE_XRAY = 'xrayAnalysis'
 const LOG_QUERY_PAGE_SIZE_OPTIONS = [50, 100, 200, 500]
+const adminLogPageSizeOptions = LOG_QUERY_PAGE_SIZE_OPTIONS.map(value => ({ value, label: String(value) }))
 const XRAY_ORE_POSITION_PAGE_SIZE_OPTIONS = [50, 100, 200, 500]
+const adminOrePageSizeOptions = XRAY_ORE_POSITION_PAGE_SIZE_OPTIONS.map(value => ({ value, label: String(value) }))
 const LOG_SHARE_PAGE_SIZE_OPTIONS = [50, 100, 200]
 const ACTIVE_JOB_STATUSES = ['PENDING', 'RUNNING']
 
@@ -148,6 +155,7 @@ const serverOptions = ref([
   { serverId: 'main', serverName: '主服' },
   { serverId: 'sub', serverName: '2服' }
 ])
+const adminServerOptions = computed(() => serverOptions.value.map(server => ({ value: server.serverId, label: server.serverName })))
 const serverSummaries = ref([])
 const overview = ref(emptyOverview())
 const players = ref([])
@@ -155,6 +163,7 @@ const daily = ref([])
 const imports = ref([])
 const logQueryServerId = ref('main')
 const logQueryMode = ref(LOG_QUERY_TYPE_COORDINATE)
+const lastLogQueryMode = ref(LOG_QUERY_TYPE_COORDINATE)
 const logQueryForms = ref(readSavedLogQueryForms())
 const logTextQueryForms = ref(readSavedLogTextQueryForms())
 const xrayAnalysisForms = ref(readSavedXrayAnalysisForms())
@@ -220,6 +229,33 @@ function minecraftJoinUrl(serverName) {
 }
 const shareMinecraftJoinUrl = computed(() => minecraftJoinUrl(selectedShareServer.value?.serverName))
 const xraySharePlayer = computed(() => xrayShareData.value?.player || null)
+const xraySharePeriodMetrics = computed(() => {
+  const player = xraySharePlayer.value
+  return [
+    { id: 'breaks', label: '破坏方块', value: formatNumber(xrayAnalysisValue(player, 'analysisBreaks', 'miningSessionBreaks')), icon: 'broken', tone: 'blue' },
+    { id: 'underground', label: '地下破坏', value: formatNumber(xrayAnalysisValue(player, 'analysisUndergroundBreaks', 'miningSessionUndergroundBreaks')), icon: 'underground', tone: 'purple' },
+    { id: 'rare', label: '稀有矿', value: formatNumber(xrayAnalysisValue(player, 'analysisRareOreBreaks', 'miningSessionRareOreBreaks')), icon: 'ore', tone: 'orange' },
+    { id: 'diamond', label: '钻石矿', value: formatNumber(xrayAnalysisValue(player, 'analysisDiamondOreBreaks', 'miningSessionDiamondOreBreaks')), icon: 'blocks', tone: 'blue' },
+    { id: 'debris', label: '远古残骸', value: formatNumber(xrayAnalysisValue(player, 'analysisAncientDebrisBreaks', 'miningSessionAncientDebrisBreaks')), icon: 'database', tone: 'orange' },
+    { id: 'ratio', label: '地下稀有矿占比', value: xrayAnalysisRareRatioText(player), icon: 'ratio', tone: 'green' },
+    { id: 'peak', label: '十分钟挖取峰值', value: formatNumber(xrayAnalysisValue(player, 'analysisPeakRareOreWindowCount', 'peakRareOreWindowCount')), icon: 'clock', tone: 'purple' },
+    { id: 'evidence', label: '周期追矿证据', value: formatNumber(xrayAnalysisTrackingEvidenceCount(player)), icon: 'evidence', tone: 'green' }
+  ]
+})
+const xrayShareSessionMetrics = computed(() => {
+  const player = xraySharePlayer.value
+  return [
+    { id: 'breaks', label: '会话破坏方块', value: formatNumber(player?.miningSessionBreaks), icon: 'broken', tone: 'blue' },
+    { id: 'underground', label: '地下破坏', value: formatNumber(player?.miningSessionUndergroundBreaks || player?.miningSessionBreaks || 0), icon: 'underground', tone: 'purple' },
+    { id: 'rare', label: '稀有矿', value: formatNumber(player?.miningSessionRareOreBreaks), icon: 'ore', tone: 'orange' },
+    { id: 'diamond', label: '钻石矿', value: formatNumber(player?.miningSessionDiamondOreBreaks), icon: 'blocks', tone: 'blue' },
+    { id: 'debris', label: '远古残骸', value: formatNumber(player?.miningSessionAncientDebrisBreaks), icon: 'database', tone: 'orange' },
+    { id: 'ratio', label: '地下稀有矿占比', value: xrayRareRatioText(player), icon: 'ratio', tone: 'green' },
+    { id: 'peak', label: '十分钟挖取峰值', value: formatNumber(player?.peakRareOreWindowCount), icon: 'clock', tone: 'purple' },
+    { id: 'evidence', label: '会话追矿证据', value: formatNumber(player?.trackingEvidenceCount), icon: 'evidence', tone: 'green' }
+  ]
+})
+
 const shareRemainingMs = computed(() => {
   if (!shareData.value?.expiresAt) return 0
   return Math.max(0, new Date(shareData.value.expiresAt).getTime() - shareNow.value)
@@ -303,7 +339,6 @@ const maxDailyTotal = computed(() => {
 })
 
 const leadingPlayers = computed(() => players.value.slice(0, 8))
-const operationFiles = computed(() => lastOperation.value?.result?.files || [])
 const importJobRunning = computed(() => importJob.value?.status === 'RUNNING' || importJob.value?.status === 'PENDING')
 const importPageFiles = computed(() => importJobRunning.value ? (importJob.value?.files || importFiles.value) : importFiles.value)
 const syncJobRunning = computed(() => syncJob.value?.status === 'RUNNING' || syncJob.value?.status === 'PENDING')
@@ -407,10 +442,12 @@ onMounted(() => {
   if (openSharePageFromPath()) {
     return
   }
+  window.addEventListener('hashchange', handleAdminHashChange)
   bootstrapAuth()
 })
 
 onUnmounted(() => {
+  window.removeEventListener('hashchange', handleAdminHashChange)
   stopShareTicker()
   stopServerTimeTicker()
   stopImportJobPolling()
@@ -497,6 +534,7 @@ async function loadXrayShareDetails() {
   xrayShareLoading.value = true
   xrayShareError.value = ''
   try {
+    await import('./xray-share.css')
     const data = await apiGet(`/api/share/xray/${encodeURIComponent(xrayShareToken.value)}`, {}, { auth: false })
     xrayShareData.value = data
     xrayShareEvidenceExpanded.value = false
@@ -624,6 +662,7 @@ async function login() {
 async function logout() {
   stopImportJobPolling()
   stopSyncJobPolling()
+  stopLogQueryPolling()
   stopServerTimeTicker()
   await apiPost('/api/auth/logout').catch(() => {})
   clearAuthToken()
@@ -665,10 +704,6 @@ async function loadAll() {
   } finally {
     loading.value = false
   }
-}
-
-async function runImport() {
-  await startImportJob()
 }
 
 async function openImportPage(serverId = filters.value.serverId) {
@@ -1025,15 +1060,28 @@ function openProfilePage() {
   resetPasswordForm()
 }
 
-async function openLogQueryPage(serverId = filters.value.serverId, queryType = logQueryMode.value) {
-  currentView.value = 'logQueryPage'
-  window.location.hash = '#/log-query'
+async function openLogQueryPage(serverId = filters.value.serverId, queryType = lastLogQueryMode.value) {
+  const mode = normalizeLogQueryMode(queryType)
+  lastLogQueryMode.value = mode
+  await openLogFeaturePage(serverId, mode)
+}
+
+async function openXrayAnalysisPage(serverId = filters.value.serverId) {
+  await openLogFeaturePage(serverId, LOG_QUERY_TYPE_XRAY)
+}
+
+// Separate page entry points share task loading, forms and cached results.
+async function openLogFeaturePage(serverId, queryType) {
+  stopLogQueryPolling()
+  currentView.value = queryType === LOG_QUERY_TYPE_XRAY ? 'xrayAnalysisPage' : 'logQueryPage'
   error.value = ''
   importMessage.value = ''
   logQueryServerId.value = serverId && serverId !== 'all' ? serverId : 'main'
+  ensureLogFeatureForms(logQueryServerId.value)
   logQueryMode.value = queryType
+  window.location.hash = logFeatureLocation(logQueryServerId.value, queryType)
   closeXrayPlayerDetail()
-  await loadAllLogQueryStates()
+  await loadAllLogQueryStates(queryType)
 }
 
 async function loadAllLogQueryStates(queryType = logQueryMode.value) {
@@ -1142,7 +1190,7 @@ async function clearLogQuery(serverId) {
       logQueryPages.value = { ...logQueryPages.value, [key]: 1 }
       logQueryResults.value = { ...logQueryResults.value, [key]: result }
     }
-    importMessage.value = `${serverNameById(serverId)} 查询结果已清空`
+    importMessage.value = `${serverNameById(serverId)} ${queryType === LOG_QUERY_TYPE_XRAY ? '分析' : '查询'}结果已清空`
   } catch (err) {
     handleApiError(err)
   }
@@ -1197,13 +1245,19 @@ function stopLogQueryPolling() {
 
 function setLogQueryServer(serverId) {
   closeXrayPlayerDetail()
+  ensureLogFeatureForms(serverId)
   logQueryServerId.value = serverId
+  window.location.hash = logFeatureLocation(serverId, logQueryMode.value)
   loadLogFeatureState(serverId, true)
 }
 
 function setLogQueryMode(queryType) {
+  if (currentView.value !== 'logQueryPage') return
+  queryType = normalizeLogQueryMode(queryType)
   if (logQueryMode.value === queryType) return
+  lastLogQueryMode.value = queryType
   logQueryMode.value = queryType
+  window.location.hash = logFeatureLocation(logQueryServerId.value, queryType)
   closeXrayPlayerDetail()
   error.value = ''
   importMessage.value = ''
@@ -1220,7 +1274,7 @@ function openXrayPlayerDetail(player) {
   closeXrayGroupSendDialog()
   currentView.value = 'xrayDetailPage'
   logQueryMode.value = LOG_QUERY_TYPE_XRAY
-  window.location.hash = `#/log-query/xray-detail?serverId=${encodeURIComponent(logQueryServerId.value)}&player=${encodeURIComponent(player.playerName)}`
+  window.location.hash = logFeatureLocation(logQueryServerId.value, LOG_QUERY_TYPE_XRAY, player.playerName)
 }
 
 function closeXrayPlayerDetail() {
@@ -1242,6 +1296,7 @@ async function openXrayDetailPage(serverId, playerName) {
   xrayDetailOrePositionPage.value = 1
   closeXrayGroupSendDialog()
   currentView.value = 'xrayDetailPage'
+  window.location.hash = logFeatureLocation(logQueryServerId.value, LOG_QUERY_TYPE_XRAY, playerName)
   error.value = ''
   importMessage.value = ''
   await loadXrayAnalysisState(logQueryServerId.value)
@@ -1289,7 +1344,7 @@ async function sendXrayDetailToGroup() {
 }
 
 async function backToXrayAnalysis() {
-  await openLogQueryPage(logQueryServerId.value, LOG_QUERY_TYPE_XRAY)
+  await openXrayAnalysisPage(logQueryServerId.value)
 }
 
 function logQueryStateKey(serverId, queryType = logQueryMode.value) {
@@ -1446,6 +1501,18 @@ function logQueryRequestBody(serverId, queryType) {
     y2: numberOrNull(form.y2),
     z2: numberOrNull(form.z2),
     dimension: form.dimension
+  }
+}
+
+function ensureLogFeatureForms(serverId) {
+  // Server options come from the API after setup; initialize lazily without
+  // replacing a form the administrator has already edited in this session.
+  for (const [forms, readSaved, defaults] of [
+    [logQueryForms, readSavedLogQueryForms, defaultLogQueryForm],
+    [logTextQueryForms, readSavedLogTextQueryForms, defaultLogTextQueryForm],
+    [xrayAnalysisForms, readSavedXrayAnalysisForms, defaultXrayAnalysisForm]
+  ]) {
+    if (!forms.value[serverId]) forms.value[serverId] = readSaved()[serverId] || defaults()
   }
 }
 
@@ -1857,17 +1924,6 @@ async function testSmbConnection() {
   }
 }
 
-function showOperationResult(type, result) {
-  lastOperation.value = {
-    type,
-    title: type === 'import' ? '解析入库结果' : 'CSV 复制结果',
-    actionLabel: type === 'import' ? '导入' : '复制',
-    result
-  }
-  currentView.value = 'operationResult'
-  window.location.hash = type === 'import' ? '#/import-result' : '#/sync-result'
-}
-
 async function goDashboard() {
   stopImportJobPolling()
   stopSyncJobPolling()
@@ -1895,20 +1951,59 @@ function selectServer(serverId) {
   loadAll()
 }
 
+// The shell emits intent; page loaders retain ownership of data and task state.
+async function navigateAdmin(id) {
+  const serverId = filters.value.serverId === 'all'
+    ? (serverOptions.value[0]?.serverId || 'main')
+    : filters.value.serverId
+  const queryServerId = ['logQueryPage', 'xrayAnalysisPage', 'xrayDetailPage'].includes(currentView.value) ? logQueryServerId.value : serverId
+  stopImportJobPolling()
+  stopSyncJobPolling()
+  stopLogQueryPolling()
+  window.scrollTo(0, 0)
+  if (id === 'dashboard') await goDashboard()
+  else if (id === 'logs') await openLogQueryPage(queryServerId)
+  else if (id === 'xray') await openXrayAnalysisPage(queryServerId)
+  else if (id === 'sync') await openSyncPage(serverId)
+  else if (id === 'import') await openImportPage(serverId)
+  else if (id === 'settings') await openSettingsPage()
+  else if (id === 'profile') openProfilePage()
+}
+
+async function handleAdminHashChange() {
+  if (!authChecked.value || !authenticated.value) return
+  const hash = window.location.hash || ''
+  const route = parseLogFeatureLocation(hash)
+  if (route) {
+    const serverId = route.serverId || (filters.value.serverId === 'all' ? 'main' : filters.value.serverId)
+    if (currentView.value === route.view && logQueryServerId.value === serverId
+        && logQueryMode.value === route.mode
+        && (route.view !== 'xrayDetailPage' || xrayDetailPlayerName.value === route.playerName)) return
+  } else {
+    const view = { '': 'dashboard', '#': 'dashboard', '#/sync': 'syncPage', '#/import': 'importPage', '#/settings': 'settingsPage', '#/profile': 'profilePage' }[hash]
+    if (!view || currentView.value === view) return
+    if (view === 'dashboard') { await goDashboard(); return }
+  }
+  stopImportJobPolling()
+  stopSyncJobPolling()
+  stopLogQueryPolling()
+  await openInitialViewFromHash()
+}
+
 async function openInitialViewFromHash() {
   const hash = window.location.hash || ''
-  if (hash.startsWith('#/log-query/xray-detail')) {
-    const [, query = ''] = hash.split('?')
-    const params = new URLSearchParams(query)
-    await openXrayDetailPage(params.get('serverId') || filters.value.serverId, params.get('player') || '')
+  const featureRoute = parseLogFeatureLocation(hash)
+  if (featureRoute) {
+    const serverId = featureRoute.serverId || filters.value.serverId
+    if (featureRoute.view === 'xrayDetailPage') await openXrayDetailPage(serverId, featureRoute.playerName)
+    else if (featureRoute.view === 'xrayAnalysisPage') await openXrayAnalysisPage(serverId)
+    else await openLogQueryPage(serverId, featureRoute.mode)
   } else if (hash === '#/sync') {
     await openSyncPage()
   } else if (hash === '#/import') {
     await openImportPage()
   } else if (hash === '#/profile') {
     openProfilePage()
-  } else if (hash === '#/log-query') {
-    await openLogQueryPage(filters.value.serverId)
   } else if (hash === '#/settings') {
     await openSettingsPage()
   }
@@ -2773,305 +2868,130 @@ function toggleAllImportFileSelection(checked) {
     </template>
   </main>
 
-  <main v-else-if="isXraySharePage" class="share-shell xray-share-shell">
-    <section v-if="xrayShareLoading" class="share-hero">
-      <div class="share-hero-copy">
-        <p class="eyebrow">矿透分析</p>
-        <h1>正在打开详情</h1>
-        <p class="share-muted">正在读取矿透分析详情...</p>
+  <PublicReportLayout v-else-if="isXraySharePage" class="xray-share-report" :loading="xrayShareLoading" :error="xrayShareError" :ready="Boolean(xrayShareData && xraySharePlayer)" loading-title="正在打开分析" loading-text="正在读取矿透分析详情" error-title="无法打开分析">
+    <template #header>
+      <div>
+        <p class="log-share-eyebrow">MINING ANALYSIS</p>
+        <h1>{{ xraySharePlayer.playerName }}</h1>
+        <p>{{ xrayShareData.serverName }} · {{ xrayAnalysisDateRange(xrayShareData) }}</p>
       </div>
-    </section>
-
-    <section v-else-if="xrayShareError" class="share-hero expired">
-      <div class="share-hero-copy">
-        <p class="eyebrow">矿透分析</p>
-        <h1>链接已过期</h1>
-        <p>{{ xrayShareError }}</p>
+      <div class="log-share-target">
+        <span><Eye :size="16" /> 风险评估</span>
+        <strong>{{ xraySharePlayer.riskScore }} <small>/ 100</small></strong>
+        <small>{{ xraySharePlayer.riskLevel }} · {{ xrayShareRemainingText }}</small>
       </div>
-    </section>
-
-    <template v-else-if="xrayShareData && xraySharePlayer">
-      <section class="share-hero xray-share-hero">
-        <div class="share-hero-copy">
-          <p class="eyebrow">矿透分析详情</p>
-          <h1>{{ xraySharePlayer.playerName }}</h1>
-          <p>{{ xrayShareData.serverName }} · {{ xraySharePlayer.riskScore }} / 100 · {{ xraySharePlayer.riskLevel }}</p>
-        </div>
-        <div class="share-hero-facts">
-          <div>
-            <span>服务器</span>
-            <strong>{{ xrayShareData.serverName }}</strong>
-          </div>
-          <div>
-            <span>分析日期</span>
-            <strong>{{ xrayAnalysisDateRange(xrayShareData) }}</strong>
-          </div>
-          <div>
-            <span>有效时间</span>
-            <strong>{{ xrayShareRemainingText }}</strong>
-          </div>
-        </div>
-      </section>
-
-      <article class="share-panel xray-share-detail">
-        <div class="xray-detail-header">
-          <div>
-            <h3>{{ xraySharePlayer.playerName }}</h3>
-            <span>{{ xraySharePlayer.riskScore }} / 100 · {{ xraySharePlayer.riskLevel }}</span>
-          </div>
-          <span class="risk-pill" :class="xrayRiskClass(xraySharePlayer.riskScore)">
-            {{ xraySharePlayer.riskScore }} / 100
-          </span>
-        </div>
-
-        <div class="xray-detail-body">
-          <section class="xray-detail-section xray-toggle-section">
-            <h4>筛选周期总量</h4>
-            <div class="xray-detail-grid">
-              <div>
-                <span>破坏方块</span>
-                <strong>{{ formatNumber(xrayAnalysisValue(xraySharePlayer, 'analysisBreaks', 'miningSessionBreaks')) }}</strong>
-              </div>
-              <div>
-                <span>地下破坏</span>
-                <strong>{{ formatNumber(xrayAnalysisValue(xraySharePlayer, 'analysisUndergroundBreaks', 'miningSessionUndergroundBreaks')) }}</strong>
-              </div>
-              <div>
-                <span>稀有矿</span>
-                <strong>{{ formatNumber(xrayAnalysisValue(xraySharePlayer, 'analysisRareOreBreaks', 'miningSessionRareOreBreaks')) }}</strong>
-              </div>
-              <div>
-                <span>钻石矿</span>
-                <strong>{{ formatNumber(xrayAnalysisValue(xraySharePlayer, 'analysisDiamondOreBreaks', 'miningSessionDiamondOreBreaks')) }}</strong>
-              </div>
-              <div>
-                <span>远古残骸</span>
-                <strong>{{ formatNumber(xrayAnalysisValue(xraySharePlayer, 'analysisAncientDebrisBreaks', 'miningSessionAncientDebrisBreaks')) }}</strong>
-              </div>
-              <div>
-                <span>地下稀有矿占比</span>
-                <strong>{{ xrayAnalysisRareRatioText(xraySharePlayer) }}</strong>
-              </div>
-              <div>
-                <span>十分钟挖取峰值</span>
-                <strong>{{ formatNumber(xrayAnalysisValue(xraySharePlayer, 'analysisPeakRareOreWindowCount', 'peakRareOreWindowCount')) }}</strong>
-              </div>
-              <div>
-                <span>周期追矿证据</span>
-                <strong>{{ formatNumber(xrayAnalysisTrackingEvidenceCount(xraySharePlayer)) }}</strong>
-              </div>
-            </div>
-          </section>
-
-          <section class="xray-detail-section xray-toggle-section">
-            <h4>最可疑挖矿会话</h4>
-            <div class="xray-detail-grid">
-              <div>
-                <span>会话时间</span>
-                <strong>{{ xrayMiningSessionTime(xraySharePlayer) }}</strong>
-              </div>
-              <div>
-                <span>会话时长</span>
-                <strong>{{ xrayMiningSessionDuration(xraySharePlayer) }}</strong>
-              </div>
-              <div>
-                <span>会话地下破坏</span>
-                <strong>{{ formatNumber(xraySharePlayer.miningSessionUndergroundBreaks || xraySharePlayer.miningSessionBreaks || 0) }}</strong>
-              </div>
-              <div>
-                <span>地下稀有矿占比</span>
-                <strong>{{ xrayRareRatioText(xraySharePlayer) }}</strong>
-              </div>
-            </div>
-          </section>
-
-          <section class="xray-detail-section xray-toggle-section">
-            <h4>最可疑挖矿会话概况</h4>
-            <div class="xray-detail-grid">
-              <div>
-                <span>稀有矿</span>
-                <strong>{{ formatNumber(xraySharePlayer.miningSessionRareOreBreaks) }}</strong>
-              </div>
-              <div>
-                <span>钻石矿</span>
-                <strong>{{ formatNumber(xraySharePlayer.miningSessionDiamondOreBreaks) }}</strong>
-              </div>
-              <div>
-                <span>远古残骸</span>
-                <strong>{{ formatNumber(xraySharePlayer.miningSessionAncientDebrisBreaks) }}</strong>
-              </div>
-              <div>
-                <span>会话追矿证据</span>
-                <strong>{{ formatNumber(xraySharePlayer.trackingEvidenceCount) }}</strong>
-              </div>
-              <div>
-                <span>十分钟挖取峰值</span>
-                <strong>{{ formatNumber(xraySharePlayer.peakRareOreWindowCount || 0) }}</strong>
-              </div>
-              <div>
-                <span>短时窗口</span>
-                <strong v-if="xraySharePlayer.peakRareOreWindowStart && xraySharePlayer.peakRareOreWindowEnd">
-                  {{ formatDateTime(xraySharePlayer.peakRareOreWindowStart) }} - {{ formatDateTime(xraySharePlayer.peakRareOreWindowEnd) }}
-                </strong>
-                <strong v-else>-</strong>
-              </div>
-            </div>
-          </section>
-
-          <section class="xray-detail-section xray-toggle-section">
-            <h4>原因</h4>
-            <div class="xray-chip-list">
-              <span v-for="reason in xraySharePlayer.reasons" :key="reason">{{ reason }}</span>
-              <span v-if="!xraySharePlayer.reasons?.length">-</span>
-            </div>
-          </section>
-
-          <section class="xray-detail-section">
-            <h4>筛选周期矿物明细</h4>
-            <div class="xray-chip-list">
-              <span v-for="ore in xrayAnalysisOreCounts(xraySharePlayer)" :key="ore.oreType">
-                {{ ore.displayName }} x{{ formatNumber(ore.count) }}
-              </span>
-              <span v-if="!xrayAnalysisOreCounts(xraySharePlayer).length">-</span>
-            </div>
-          </section>
-
-          <section class="xray-detail-section">
-            <h4>筛选周期证据</h4>
-            <div class="xray-expand-row">
-              <button
-                v-if="xraySharePlayer.evidence?.length"
-                class="secondary-button mini-button"
-                type="button"
-                @click="xrayShareEvidenceExpanded = !xrayShareEvidenceExpanded"
-              >
-                <span>{{ xrayShareEvidenceExpanded ? '收起' : `展开 ${xraySharePlayer.evidence.length} 条` }}</span>
-              </button>
-            </div>
-            <div v-if="xraySharePlayer.evidence?.length && xrayShareEvidenceExpanded" class="xray-evidence-list">
-              <div v-for="(evidence, evidenceIndex) in xraySharePlayer.evidence" :key="`${xraySharePlayer.playerName}:${evidence.startedAt}:${evidence.summary}`" class="evidence-block">
-                <strong>{{ evidence.summary }}</strong>
-                <small>{{ xrayEvidenceTime(evidence) }} · +{{ evidence.score }}</small>
-                <button
-                  v-if="evidence.rows?.length"
-                  class="secondary-button mini-button"
-                  type="button"
-                  @click="toggleShareXrayEvidenceRows(evidence, evidenceIndex)"
-                >
-                  <span>{{ isShareXrayEvidenceRowsExpanded(evidence, evidenceIndex) ? '收起明细' : `展开明细 ${evidence.rows.length} 条` }}</span>
-                </button>
-                <div v-if="evidence.rows?.length && isShareXrayEvidenceRowsExpanded(evidence, evidenceIndex)" class="evidence-lines">
-                  <span v-for="row in evidence.rows" :key="`${row.filePath}:${row.lineNumber}`">
-                    {{ evidenceRowText(row) }}
-                  </span>
-                </div>
-              </div>
-            </div>
-            <p v-else-if="!xraySharePlayer.evidence?.length" class="settings-hint">没有追矿证据。</p>
-          </section>
-
-          <section id="xray-share-rare-ore-positions" class="xray-detail-section">
-            <h4>稀有矿位置</h4>
-            <div class="xray-expand-row">
-              <button
-                v-if="xraySharePlayer.rareOreRows?.length"
-                class="secondary-button mini-button"
-                type="button"
-                @click="toggleXrayShareOrePositions"
-              >
-                <span>{{ xrayShareOrePositionsExpanded ? '收起' : `展开 ${xrayShareRareOreRows.length} 条` }}</span>
-              </button>
-            </div>
-            <div v-if="xraySharePlayer.rareOreRows?.length && xrayShareOrePositionsExpanded" class="table-wrap">
-              <div class="table-toolbar">
-                <span>
-                  第 {{ clampPage(xrayShareOrePositionPage, xrayShareOrePositionTotalPages) }} / {{ xrayShareOrePositionTotalPages }} 页，本页 {{ formatNumber(xraySharePagedRareOreRows.length) }} 条，共 {{ formatNumber(xrayShareRareOreRows.length) }} 条
-                </span>
-                <div class="pagination-controls">
-                  <label>
-                    <span>每页</span>
-                    <select :value="xrayShareOrePositionPageSize" @change="setXrayShareOrePositionPageSize($event.target.value)">
-                      <option v-for="size in XRAY_ORE_POSITION_PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</option>
-                    </select>
-                  </label>
-                  <button class="icon-button" type="button" title="上一页" :disabled="xrayShareOrePositionPage <= 1" @click="setXrayShareOrePositionPage(xrayShareOrePositionPage - 1)">
-                    <ChevronLeft :size="18" />
-                  </button>
-                  <button class="icon-button" type="button" title="下一页" :disabled="xrayShareOrePositionPage >= xrayShareOrePositionTotalPages" @click="setXrayShareOrePositionPage(xrayShareOrePositionPage + 1)">
-                    <ChevronRight :size="18" />
-                  </button>
-                </div>
-              </div>
-              <table class="xray-ore-position-table">
-                <thead>
-                  <tr>
-                    <th>顺序</th>
-                    <th>时间</th>
-                    <th>矿物</th>
-                    <th>玩家坐标</th>
-                    <th>交互坐标</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="(row, index) in xraySharePagedRareOreRows" :key="`${row.filePath}:${row.lineNumber}:share-rare`">
-                    <td>{{ xrayShareOrePositionOffset + index + 1 }}</td>
-                    <td>{{ row.date }} {{ row.time }}</td>
-                    <td class="message-cell">{{ logQuerySummaryDetailText(row) }}</td>
-                    <td>{{ logQueryCoordinateText(row.x, row.y, row.z, row.dimension) }}</td>
-                    <td>{{ logQueryInteractionCoordinateText(row) }}</td>
-                  </tr>
-                </tbody>
-              </table>
-              <div class="table-toolbar bottom-toolbar">
-                <span>
-                  第 {{ clampPage(xrayShareOrePositionPage, xrayShareOrePositionTotalPages) }} / {{ xrayShareOrePositionTotalPages }} 页，本页 {{ formatNumber(xraySharePagedRareOreRows.length) }} 条，共 {{ formatNumber(xrayShareRareOreRows.length) }} 条
-                </span>
-                <div class="pagination-controls">
-                  <label>
-                    <span>每页</span>
-                    <select :value="xrayShareOrePositionPageSize" @change="setXrayShareOrePositionPageSize($event.target.value)">
-                      <option v-for="size in XRAY_ORE_POSITION_PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</option>
-                    </select>
-                  </label>
-                  <button class="icon-button" type="button" title="上一页" :disabled="xrayShareOrePositionPage <= 1" @click="setXrayShareOrePositionPage(xrayShareOrePositionPage - 1)">
-                    <ChevronLeft :size="18" />
-                  </button>
-                  <button class="icon-button" type="button" title="下一页" :disabled="xrayShareOrePositionPage >= xrayShareOrePositionTotalPages" @click="setXrayShareOrePositionPage(xrayShareOrePositionPage + 1)">
-                    <ChevronRight :size="18" />
-                  </button>
-                  <button class="secondary-button" type="button" @click="scrollToXrayShareOrePositions">
-                    <ArrowUp :size="18" />
-                    <span>返回稀有矿位置</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-            <p v-else-if="!xraySharePlayer.rareOreRows?.length" class="settings-hint">没有稀有矿位置记录。</p>
-          </section>
-        </div>
-      </article>
     </template>
-  </main>
-
-  <main v-else-if="isLogSharePage" class="log-share-page">
-    <section v-if="logShareLoading" class="share-v2-state">
-      <div class="share-v2-state-mark"><Search :size="24" /></div>
-      <div>
-        <h1>正在打开日志</h1>
-        <p>正在读取查询结果</p>
-      </div>
+    <template #summary>
+      <article><Hammer :size="19" /><span>周期破坏方块</span><strong>{{ formatNumber(xrayAnalysisValue(xraySharePlayer, 'analysisBreaks', 'miningSessionBreaks')) }}</strong></article>
+      <article><Pickaxe :size="19" /><span>周期稀有矿</span><strong>{{ formatNumber(xrayAnalysisValue(xraySharePlayer, 'analysisRareOreBreaks', 'miningSessionRareOreBreaks')) }}</strong></article>
+      <article><FileText :size="19" /><span>周期追矿证据</span><strong>{{ formatNumber(xrayAnalysisTrackingEvidenceCount(xraySharePlayer)) }}</strong></article>
+      <article><Clock :size="19" /><span>十分钟挖取峰值</span><strong>{{ formatNumber(xrayAnalysisValue(xraySharePlayer, 'analysisPeakRareOreWindowCount', 'peakRareOreWindowCount')) }}</strong></article>
+    </template>
+    <section class="log-share-content">
+      <div class="log-share-heading"><div><p>ANALYSIS DETAILS</p><h2>分析统计</h2></div><span>周期总量与单次会话分开展示</span></div>
+      <section class="xray-share-stat-group">
+        <header class="xray-share-stat-heading"><span class="xray-share-section-icon"><CalendarDays :size="19" /></span><div class="xray-share-section-title"><h3>筛选周期</h3><small>{{ xrayAnalysisDateRange(xrayShareData) }}</small></div></header>
+        <PublicMetricGrid :items="xraySharePeriodMetrics" />
+      </section>
+      <section class="xray-share-stat-group">
+        <header class="xray-share-stat-heading"><span class="xray-share-section-icon is-purple"><Pickaxe :size="19" /></span><div class="xray-share-section-title"><h3>最可疑挖矿会话</h3><small>单次会话的时间、矿物及挖掘行为</small></div><span class="xray-share-duration"><Clock :size="14" />持续 {{ xrayMiningSessionDuration(xraySharePlayer) }}</span></header>
+        <dl class="xray-share-session-facts">
+          <div><dt><CalendarDays :size="15" />会话时间</dt><dd>{{ formatReportTimeRange(xraySharePlayer.miningSessionStart, xraySharePlayer.miningSessionEnd) }}</dd></div>
+          <div><dt><Clock :size="15" />挖取峰值窗口</dt><dd v-if="xraySharePlayer.peakRareOreWindowStart && xraySharePlayer.peakRareOreWindowEnd">{{ formatReportTimeRange(xraySharePlayer.peakRareOreWindowStart, xraySharePlayer.peakRareOreWindowEnd) }}</dd><dd v-else>-</dd></div>
+        </dl>
+        <PublicMetricGrid :items="xrayShareSessionMetrics" />
+      </section>
+      <section class="xray-share-stat-group">
+        <header class="xray-share-stat-heading"><span class="xray-share-section-icon is-orange"><Layers :size="19" /></span><div class="xray-share-section-title"><h3>周期矿物明细</h3><small>按矿物类型查看周期挖取数量</small></div></header>
+        <div v-if="xrayAnalysisOreCounts(xraySharePlayer).length" class="xray-share-ore-list">
+          <div v-for="ore in xrayAnalysisOreCounts(xraySharePlayer)" :key="ore.oreType"><span class="xray-share-ore-icon"><Pickaxe :size="17" /></span><span>{{ ore.displayName }}</span><strong>{{ formatNumber(ore.count) }}<small> 个</small></strong></div>
+        </div>
+        <p v-else class="xray-share-empty">暂无矿物记录</p>
+      </section>
     </section>
-
-    <section v-else-if="logShareError" class="share-v2-state share-v2-state-error">
-      <div class="share-v2-state-mark"><Clock :size="24" /></div>
-      <div>
-        <h1>链接已过期</h1>
-        <p>{{ logShareError }}</p>
-      </div>
+    <section class="log-share-content">
+      <div class="log-share-heading"><div><p>RISK SUMMARY</p><h2>风险原因</h2></div><span>{{ xraySharePlayer.reasons?.length || 0 }} 条风险线索</span></div>
+      <ul v-if="xraySharePlayer.reasons?.length" class="xray-share-reasons"><li v-for="reason in xraySharePlayer.reasons" :key="reason">{{ reason }}</li></ul>
+      <p v-else class="xray-share-empty">没有风险原因记录</p>
     </section>
+    <section class="log-share-content">
+      <div class="log-share-heading">
+        <div><p>EVIDENCE</p><h2>筛选周期证据</h2></div>
+        <button v-if="xraySharePlayer.evidence?.length" class="xray-share-toggle" type="button" :aria-expanded="xrayShareEvidenceExpanded" @click="xrayShareEvidenceExpanded = !xrayShareEvidenceExpanded">
+          <FileText :size="16" /><span>{{ xrayShareEvidenceExpanded ? '收起证据' : `查看 ${xraySharePlayer.evidence.length} 条证据` }}</span><ChevronDown :size="15" :class="{ 'xray-share-rotated': xrayShareEvidenceExpanded }" />
+        </button>
+      </div>
+      <div v-if="xraySharePlayer.evidence?.length && xrayShareEvidenceExpanded" class="xray-share-evidence">
+        <article v-for="(evidence, evidenceIndex) in xraySharePlayer.evidence" :key="`${xraySharePlayer.playerName}:${evidence.startedAt}:${evidence.summary}`" class="xray-share-evidence-card">
+          <header class="xray-share-evidence-heading">
+            <span class="xray-share-evidence-number">{{ String(evidenceIndex + 1).padStart(2, '0') }}</span>
+            <div><h3>{{ evidence.summary }}</h3><p>{{ xrayEvidenceTime(evidence) }}</p></div>
+          </header>
+          <button v-if="evidence.rows?.length" class="xray-share-toggle xray-share-toggle-subtle" type="button" :aria-expanded="isShareXrayEvidenceRowsExpanded(evidence, evidenceIndex)" @click="toggleShareXrayEvidenceRows(evidence, evidenceIndex)">
+            <FileText :size="15" /><span>{{ isShareXrayEvidenceRowsExpanded(evidence, evidenceIndex) ? '收起原始记录' : `查看 ${evidence.rows.length} 条原始记录` }}</span><ChevronDown :size="14" :class="{ 'xray-share-rotated': isShareXrayEvidenceRowsExpanded(evidence, evidenceIndex) }" />
+          </button>
+          <ol v-if="evidence.rows?.length && isShareXrayEvidenceRowsExpanded(evidence, evidenceIndex)" class="xray-share-evidence-lines">
+            <li v-for="row in evidence.rows" :key="`${row.filePath}:${row.lineNumber}`">{{ evidenceRowText(row) }}</li>
+          </ol>
+        </article>
+      </div>
+      <p v-else class="xray-share-empty">{{ xraySharePlayer.evidence?.length ? '按需展开证据，查看时间范围与对应的原始记录' : '没有追矿证据' }}</p>
+    </section>
+    <section id="xray-share-rare-ore-positions" class="log-share-content">
+      <div class="log-share-heading">
+        <div><p>ORE POSITIONS</p><h2>稀有矿位置</h2></div>
+        <button v-if="xrayShareRareOreRows.length" class="xray-share-toggle" type="button" :aria-expanded="xrayShareOrePositionsExpanded" @click="toggleXrayShareOrePositions"><Crosshair :size="16" /><span>{{ xrayShareOrePositionsExpanded ? '收起位置' : `查看 ${xrayShareRareOreRows.length} 条位置` }}</span><ChevronDown :size="15" :class="{ 'xray-share-rotated': xrayShareOrePositionsExpanded }" /></button>
+      </div>
+      <template v-if="xrayShareOrePositionsExpanded && xrayShareRareOreRows.length">
+        <div class="log-share-pagination xray-share-pagination">
+          <span>第 {{ clampPage(xrayShareOrePositionPage, xrayShareOrePositionTotalPages) }} / {{ xrayShareOrePositionTotalPages }} 页，共 {{ formatNumber(xrayShareRareOreRows.length) }} 条</span>
+          <div>
+            <label>每页
+              <select :value="xrayShareOrePositionPageSize" @change="setXrayShareOrePositionPageSize($event.target.value)">
+                <option v-for="size in XRAY_ORE_POSITION_PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</option>
+              </select>
+            </label>
+            <button type="button" title="上一页" aria-label="上一页" :disabled="xrayShareOrePositionPage <= 1" @click="setXrayShareOrePositionPage(xrayShareOrePositionPage - 1)"><ChevronLeft :size="18" /></button>
+            <button type="button" title="下一页" aria-label="下一页" :disabled="xrayShareOrePositionPage >= xrayShareOrePositionTotalPages" @click="setXrayShareOrePositionPage(xrayShareOrePositionPage + 1)"><ChevronRight :size="18" /></button>
+          </div>
+        </div>
+        <div class="log-share-table-wrap">
+          <table class="xray-ore-position-table">
+            <thead><tr><th>顺序</th><th>时间</th><th>矿物</th><th>玩家坐标</th><th>交互坐标</th></tr></thead>
+            <tbody><tr v-for="(row, index) in xraySharePagedRareOreRows" :key="`${row.filePath}:${row.lineNumber}:share-rare`">
+              <td>{{ xrayShareOrePositionOffset + index + 1 }}</td><td>{{ row.date }} {{ row.time }}</td>
+              <td class="message-cell">{{ logQuerySummaryDetailText(row) }}</td><td>{{ logQueryCoordinateText(row.x, row.y, row.z, row.dimension) }}</td><td>{{ logQueryInteractionCoordinateText(row) }}</td>
+            </tr></tbody>
+          </table>
+        </div>
+        <div class="log-share-cards">
+          <article v-for="(row, index) in xraySharePagedRareOreRows" :key="`${row.filePath}:${row.lineNumber}:share-card`">
+            <div><strong>{{ xrayShareOrePositionOffset + index + 1 }} · {{ logQuerySummaryDetailText(row) }}</strong><span>{{ row.date }} {{ row.time }}</span></div>
+            <p>交互坐标：{{ logQueryInteractionCoordinateText(row) }}</p>
+            <small><Crosshair :size="14" />玩家坐标：{{ logQueryCoordinateText(row.x, row.y, row.z, row.dimension) }}</small>
+          </article>
+        </div>
+        <div class="log-share-pagination xray-share-pagination">
+          <span>第 {{ clampPage(xrayShareOrePositionPage, xrayShareOrePositionTotalPages) }} / {{ xrayShareOrePositionTotalPages }} 页，共 {{ formatNumber(xrayShareRareOreRows.length) }} 条</span>
+          <div>
+            <label>每页
+              <select :value="xrayShareOrePositionPageSize" @change="setXrayShareOrePositionPageSize($event.target.value)">
+                <option v-for="size in XRAY_ORE_POSITION_PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</option>
+              </select>
+            </label>
+            <button type="button" title="上一页" aria-label="上一页" :disabled="xrayShareOrePositionPage <= 1" @click="setXrayShareOrePositionPage(xrayShareOrePositionPage - 1)"><ChevronLeft :size="18" /></button>
+            <button type="button" title="下一页" aria-label="下一页" :disabled="xrayShareOrePositionPage >= xrayShareOrePositionTotalPages" @click="setXrayShareOrePositionPage(xrayShareOrePositionPage + 1)"><ChevronRight :size="18" /></button>
+          </div>
+        </div>
+        <button class="xray-share-toggle xray-share-back-top" type="button" @click="scrollToXrayShareOrePositions"><ArrowUp :size="16" />返回稀有矿位置</button>
+      </template>
+      <p v-else class="xray-share-empty">{{ xrayShareRareOreRows.length ? `共 ${formatNumber(xrayShareRareOreRows.length)} 条位置记录，展开后查看` : '没有稀有矿位置记录' }}</p>
+    </section>
+    <template #footer>{{ xrayShareData.serverName }} · 矿透分析</template>
+  </PublicReportLayout>
 
-    <template v-else-if="logShareData">
-      <header class="log-share-hero">
+  <PublicReportLayout v-else-if="isLogSharePage" :loading="logShareLoading" :error="logShareError" :ready="Boolean(logShareData)">
+    <template #header>
         <div>
           <p class="log-share-eyebrow">SERVER LOGS</p>
           <h1>服务器日志</h1>
@@ -3082,15 +3002,13 @@ function toggleAllImportFileSelection(checked) {
           <strong>{{ formatCoordValue(logShareData.x) }}, {{ formatCoordValue(logShareData.y) }}, {{ formatCoordValue(logShareData.z) }}</strong>
           <small>半径 {{ formatCoordValue(logShareData.radius) }} 格 · {{ logShareRemainingText }}</small>
         </div>
-      </header>
-
-      <section class="log-share-summary">
+    </template>
+    <template #summary>
         <article><Search :size="19" /><span>匹配日志</span><strong>{{ formatNumber(logShareData.matchedRows || 0) }}</strong></article>
         <article><FileText :size="19" /><span>日志总数</span><strong>{{ formatNumber(logShareTotalRows) }}</strong></article>
         <article><Database :size="19" /><span>扫描文件</span><strong>{{ formatNumber(logShareData.scannedFiles || 0) }}</strong></article>
         <article><Clock :size="19" /><span>链接状态</span><strong>{{ logShareRemainingText }}</strong></article>
-      </section>
-
+    </template>
       <section class="log-share-content">
         <div class="log-share-heading">
           <div>
@@ -3141,9 +3059,8 @@ function toggleAllImportFileSelection(checked) {
         </div>
       </section>
 
-      <footer class="log-share-footer">{{ logShareData.serverName }} · 服务器日志</footer>
-    </template>
-  </main>
+    <template #footer>{{ logShareData.serverName }} · 服务器日志</template>
+  </PublicReportLayout>
 
   <main v-else-if="isRankingSharePage" class="ranking-share-v2">
     <section v-if="rankingShareLoading" class="share-v2-state">
@@ -3319,58 +3236,16 @@ function toggleAllImportFileSelection(checked) {
     </template>
   </main>
 
-  <main v-else-if="!authChecked" class="login-shell">
-    <section class="login-panel">
-      <LockKeyhole :size="28" />
-      <p class="eyebrow">PlayerLogger</p>
-      <h1>管理员后台</h1>
-    </section>
-  </main>
+  <AdminLogin v-else-if="!authChecked || !authenticated" :checking="!authChecked" :loading="loginLoading" :error="loginError" v-model:username="loginForm.username" v-model:password="loginForm.password" @submit="login" />
 
-  <main v-else-if="!authenticated" class="login-shell">
-    <form class="login-panel" @submit.prevent="login">
-      <LockKeyhole :size="28" />
-      <p class="eyebrow">PlayerLogger</p>
-      <h1>管理员登录</h1>
-      <label>
-        <span>账号</span>
-        <input v-model.trim="loginForm.username" type="text" autocomplete="username" />
-      </label>
-      <label>
-        <span>密码</span>
-        <input v-model="loginForm.password" type="password" autocomplete="current-password" />
-      </label>
-      <button class="primary-button" type="submit" :disabled="loginLoading">
-        <LockKeyhole :size="18" />
-        <span>{{ loginLoading ? '登录中' : '登录' }}</span>
-      </button>
-      <p v-if="loginError" class="notice error">{{ loginError }}</p>
-    </form>
-  </main>
-
-  <main v-else class="app-shell">
+  <AdminLayout v-else :active="activeAdminPage" :account="currentAdmin" :server-time="serverTimeDisplay" @navigate="navigateAdmin" @logout="logout">
+  <main class="app-shell">
     <section v-if="currentView === 'settingsPage'" class="result-page">
       <div class="topbar">
-        <div>
-          <p class="eyebrow">PlayerLogger</p>
-          <h1>系统设置</h1>
-        </div>
         <div class="actions">
-          <span v-if="serverTimeDisplay" class="server-time-badge">
-            <Clock :size="16" />
-            {{ serverTimeDisplay }}
-          </span>
-          <button class="admin-badge" type="button" title="个人中心" @click="openProfilePage">
-            <UserRound :size="16" />
-            {{ currentAdmin }}
-          </button>
           <button class="primary-button" type="button" :disabled="settingsSaving || settingsLoading" @click="saveSyncConfig">
             <Save :size="18" />
             <span>{{ settingsSaving ? '保存中' : '保存设置' }}</span>
-          </button>
-          <button class="secondary-button" type="button" @click="goDashboard">
-            <ArrowLeft :size="18" />
-            <span>返回统计</span>
           </button>
         </div>
       </div>
@@ -3422,16 +3297,16 @@ function toggleAllImportFileSelection(checked) {
               <span>用户名</span>
               <input type="text" v-model="syncConfig.smbUsername" placeholder="SMB 用户名" />
             </label>
-            <label>
-              <span>密码</span>
+            <div class="admin-password-setting">
+              <label for="smb-password">密码</label>
               <div class="password-field">
-                <input :type="showSmbPassword ? 'text' : 'password'" v-model="syncConfig.smbPassword" placeholder="留空则不修改" />
-                <button type="button" class="icon-button ghost password-toggle" @click="showSmbPassword = !showSmbPassword" tabindex="-1">
+                <input id="smb-password" :type="showSmbPassword ? 'text' : 'password'" v-model="syncConfig.smbPassword" placeholder="留空则不修改" />
+                <button type="button" class="icon-button ghost password-toggle" :aria-label="showSmbPassword ? '隐藏 SMB 密码' : '显示 SMB 密码'" :title="showSmbPassword ? '隐藏密码' : '显示密码'" :aria-pressed="showSmbPassword" aria-controls="smb-password" @click="showSmbPassword = !showSmbPassword">
                   <EyeOff v-if="showSmbPassword" :size="16" />
                   <Eye v-else :size="16" />
                 </button>
               </div>
-            </label>
+            </div>
             <label>
               <span>共享名</span>
               <input type="text" v-model="syncConfig.smbShare" placeholder="例: share 或 data（Windows 共享文件夹名称）" />
@@ -3541,22 +3416,26 @@ function toggleAllImportFileSelection(checked) {
                 <strong>{{ task.serverName || task.serverId }}</strong>
                 <span>{{ task.serverId }}</span>
               </div>
-              <label class="toggle-label">
-                <input type="checkbox" v-model="task.syncEnabled" />
+              <div class="admin-schedule-control" :class="{ 'is-enabled': task.syncEnabled }">
+              <label class="toggle-label admin-schedule-toggle">
+                <input type="checkbox" role="switch" v-model="task.syncEnabled" />
                 <span>自动复制 CSV</span>
               </label>
               <label class="time-field">
                 <span>复制时间</span>
                 <input type="time" v-model="task.syncTime" :disabled="!task.syncEnabled" />
               </label>
-              <label class="toggle-label">
-                <input type="checkbox" v-model="task.importEnabled" />
+              </div>
+              <div class="admin-schedule-control" :class="{ 'is-enabled': task.importEnabled }">
+              <label class="toggle-label admin-schedule-toggle">
+                <input type="checkbox" role="switch" v-model="task.importEnabled" />
                 <span>自动解析入库</span>
               </label>
               <label class="time-field">
                 <span>解析时间</span>
                 <input type="time" v-model="task.importTime" :disabled="!task.importEnabled" />
               </label>
+              </div>
             </div>
           </div>
           <p class="settings-hint schedule-hint">建议先复制 CSV，再间隔 5-10 分钟解析入库；主服和 2服可以设置不同时间，避免任务同时抢占。</p>
@@ -3621,23 +3500,11 @@ function toggleAllImportFileSelection(checked) {
 
     <section v-else-if="currentView === 'profilePage'" class="result-page">
       <div class="topbar">
-        <div>
-          <p class="eyebrow">PlayerLogger</p>
-          <h1>个人中心</h1>
-        </div>
         <div class="actions">
-          <span v-if="serverTimeDisplay" class="server-time-badge">
-            <Clock :size="16" />
-            {{ serverTimeDisplay }}
-          </span>
           <span class="admin-badge">
             <UserRound :size="16" />
             {{ currentAdmin }}
           </span>
-          <button class="secondary-button" type="button" @click="goDashboard">
-            <ArrowLeft :size="18" />
-            <span>返回统计</span>
-          </button>
         </div>
       </div>
 
@@ -3709,19 +3576,11 @@ function toggleAllImportFileSelection(checked) {
 
     <section v-else-if="currentView === 'syncPage'" class="result-page">
       <div class="topbar">
-        <div>
-          <p class="eyebrow">PlayerLogger</p>
-          <h1>CSV 复制</h1>
-        </div>
         <div class="actions">
-          <span v-if="serverTimeDisplay" class="server-time-badge">
-            <Clock :size="16" />
-            {{ serverTimeDisplay }}
-          </span>
-          <button class="admin-badge" type="button" title="个人中心" @click="openProfilePage">
-            <UserRound :size="16" />
-            {{ currentAdmin }}
-          </button>
+          <label class="admin-task-server">
+            <span>服务器</span>
+            <AdminSelect :model-value="filters.serverId" :options="adminServerOptions" label="任务服务器" @update:model-value="openSyncPage" />
+          </label>
           <button class="icon-button ghost" type="button" title="刷新文件对比" :disabled="syncPageLoading || syncJobRunning" @click="loadSyncPageFiles">
             <RefreshCw :size="18" :class="{ spin: syncPageLoading }" />
           </button>
@@ -3732,10 +3591,6 @@ function toggleAllImportFileSelection(checked) {
           <button class="primary-button" type="button" :disabled="syncingFiles || syncJobRunning" @click="startSyncJob">
             <Play :size="18" />
             <span>{{ syncJobRunning ? '复制中' : `开始复制 ${selectedServerName}` }}</span>
-          </button>
-          <button class="secondary-button" type="button" @click="goDashboard">
-            <ArrowLeft :size="18" />
-            <span>返回统计</span>
           </button>
         </div>
       </div>
@@ -3842,19 +3697,11 @@ function toggleAllImportFileSelection(checked) {
 
     <section v-else-if="currentView === 'importPage'" class="result-page">
       <div class="topbar">
-        <div>
-          <p class="eyebrow">PlayerLogger</p>
-          <h1>解析入库</h1>
-        </div>
         <div class="actions">
-          <span v-if="serverTimeDisplay" class="server-time-badge">
-            <Clock :size="16" />
-            {{ serverTimeDisplay }}
-          </span>
-          <button class="admin-badge" type="button" title="个人中心" @click="openProfilePage">
-            <UserRound :size="16" />
-            {{ currentAdmin }}
-          </button>
+          <label class="admin-task-server">
+            <span>服务器</span>
+            <AdminSelect :model-value="filters.serverId" :options="adminServerOptions" label="任务服务器" @update:model-value="openImportPage" />
+          </label>
           <button class="icon-button ghost" type="button" title="刷新文件" :disabled="importPageLoading || importJobRunning" @click="loadImportFiles">
             <RefreshCw :size="18" :class="{ spin: importPageLoading }" />
           </button>
@@ -3865,10 +3712,6 @@ function toggleAllImportFileSelection(checked) {
           <button class="primary-button" type="button" :disabled="importing || importJobRunning || !importPageFiles.length" @click="startImportJob">
             <Play :size="18" />
             <span>{{ importJobRunning ? '解析中' : `开始解析 ${selectedServerName}` }}</span>
-          </button>
-          <button class="secondary-button" type="button" @click="goDashboard">
-            <ArrowLeft :size="18" />
-            <span>返回统计</span>
           </button>
         </div>
       </div>
@@ -3981,27 +3824,11 @@ function toggleAllImportFileSelection(checked) {
       </article>
     </section>
 
-    <section v-else-if="currentView === 'logQueryPage'" class="result-page log-query-page">
+    <section v-else-if="currentView === 'logQueryPage' || currentView === 'xrayAnalysisPage'" class="result-page log-query-page" :class="{ 'xray-analysis-page': currentView === 'xrayAnalysisPage' }">
       <div class="topbar">
-        <div>
-          <p class="eyebrow">PlayerLogger</p>
-          <h1>查日志</h1>
-        </div>
         <div class="actions">
-          <span v-if="serverTimeDisplay" class="server-time-badge">
-            <Clock :size="16" />
-            {{ serverTimeDisplay }}
-          </span>
-          <button class="admin-badge" type="button" title="个人中心" @click="openProfilePage">
-            <UserRound :size="16" />
-            {{ currentAdmin }}
-          </button>
-          <button class="icon-button ghost" type="button" title="刷新查询状态" :disabled="selectedLogQueryLoading" @click="loadLogFeatureState(logQueryServerId)">
+          <button class="icon-button ghost" type="button" :title="currentView === 'xrayAnalysisPage' ? '刷新分析状态' : '刷新查询状态'" :disabled="selectedLogQueryLoading" @click="loadLogFeatureState(logQueryServerId)">
             <RefreshCw :size="18" :class="{ spin: selectedLogQueryLoading || selectedLogQueryRunning }" />
-          </button>
-          <button class="secondary-button" type="button" @click="goDashboard">
-            <ArrowLeft :size="18" />
-            <span>返回统计</span>
           </button>
         </div>
       </div>
@@ -4009,37 +3836,9 @@ function toggleAllImportFileSelection(checked) {
       <p v-if="error" class="notice error">{{ error }}</p>
       <p v-if="importMessage" class="notice success">{{ importMessage }}</p>
 
-      <nav class="log-feature-tabs" aria-label="日志功能">
-        <button
-          type="button"
-          :class="{ active: logQueryMode === LOG_QUERY_TYPE_COORDINATE }"
-          :aria-current="logQueryMode === LOG_QUERY_TYPE_COORDINATE ? 'page' : undefined"
-          @click="setLogQueryMode(LOG_QUERY_TYPE_COORDINATE)"
-        >
-          <Crosshair :size="16" />
-          <span>通过坐标查询</span>
-        </button>
-        <button
-          type="button"
-          :class="{ active: logQueryMode === LOG_QUERY_TYPE_PLAYER_KEYWORD }"
-          :aria-current="logQueryMode === LOG_QUERY_TYPE_PLAYER_KEYWORD ? 'page' : undefined"
-          @click="setLogQueryMode(LOG_QUERY_TYPE_PLAYER_KEYWORD)"
-        >
-          <Search :size="16" />
-          <span>综合筛选</span>
-        </button>
-        <button
-          type="button"
-          :class="{ active: logQueryMode === LOG_QUERY_TYPE_XRAY }"
-          :aria-current="logQueryMode === LOG_QUERY_TYPE_XRAY ? 'page' : undefined"
-          @click="setLogQueryMode(LOG_QUERY_TYPE_XRAY)"
-        >
-          <Eye :size="16" />
-          <span>矿透分析</span>
-        </button>
-      </nav>
+      <LogQueryTabs v-if="currentView === 'logQueryPage'" :mode="logQueryMode" @change="setLogQueryMode" />
 
-      <section class="server-tabs compact" aria-label="日志查询服务器">
+      <section class="server-tabs compact" :aria-label="currentView === 'xrayAnalysisPage' ? '矿透分析服务器' : '日志查询服务器'">
         <button
           v-for="server in serverOptions"
           :key="server.serverId"
@@ -4049,7 +3848,7 @@ function toggleAllImportFileSelection(checked) {
         >
           <Search :size="16" />
           <span>{{ server.serverName }}</span>
-          <small v-if="isActiveJob(logFeatureResultFor(server.serverId))">查询中</small>
+          <small v-if="isActiveJob(logFeatureResultFor(server.serverId))">{{ currentView === 'xrayAnalysisPage' ? '分析中' : '查询中' }}</small>
           <small v-else-if="logQueryMode === LOG_QUERY_TYPE_XRAY && xrayAnalysisResultFor(server.serverId)?.maxRiskScore">
             {{ xrayAnalysisResultFor(server.serverId).maxRiskScore }}分
           </small>
@@ -4063,7 +3862,7 @@ function toggleAllImportFileSelection(checked) {
           <span>{{ logQueryStatusLabel(selectedLogFeatureResult?.status) }}</span>
         </div>
 
-        <form v-if="logQueryMode === LOG_QUERY_TYPE_COORDINATE" class="log-query-form" @submit.prevent="startLogQuery(logQueryServerId)">
+        <form v-if="logQueryMode === LOG_QUERY_TYPE_COORDINATE" class="log-query-form log-coordinate-form" @submit.prevent="startLogQuery(logQueryServerId)">
           <label>
             <span>开始日期</span>
             <input v-model="logQueryForms[logQueryServerId].fromDate" type="date" required @change="saveLogQueryForms" />
@@ -4189,7 +3988,7 @@ function toggleAllImportFileSelection(checked) {
       <article v-if="selectedLogFeatureHasResult" class="panel wide">
         <div class="panel-title">
           <h2>{{ logQueryMode === LOG_QUERY_TYPE_XRAY ? '分析结果' : '查询结果' }}</h2>
-          <span>{{ selectedLogFeatureResult?.message || '还没有查询记录' }}</span>
+          <span>{{ selectedLogFeatureResult?.message || (logQueryMode === LOG_QUERY_TYPE_XRAY ? '还没有分析记录' : '还没有查询记录') }}</span>
         </div>
         <p v-if="selectedLogQueryRunning" class="settings-hint">
           正在扫描 {{ selectedLogFeatureResult?.currentFile || 'CSV 文件' }}，关掉页面也可以稍后回来查看结果。
@@ -4256,9 +4055,7 @@ function toggleAllImportFileSelection(checked) {
           <div class="pagination-controls">
             <label>
               <span>每页</span>
-              <select :value="selectedLogQueryPageSize" @change="setLogQueryPageSize($event.target.value)">
-                <option v-for="size in LOG_QUERY_PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</option>
-              </select>
+              <AdminSelect :model-value="selectedLogQueryPageSize" :options="adminLogPageSizeOptions" label="每页条数" @update:model-value="setLogQueryPageSize" />
             </label>
             <button
               class="icon-button"
@@ -4350,9 +4147,7 @@ function toggleAllImportFileSelection(checked) {
           <div class="pagination-controls">
             <label>
               <span>每页</span>
-              <select :value="selectedLogQueryPageSize" @change="setLogQueryPageSize($event.target.value)">
-                <option v-for="size in LOG_QUERY_PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</option>
-              </select>
+              <AdminSelect :model-value="selectedLogQueryPageSize" :options="adminLogPageSizeOptions" label="每页条数" @update:model-value="setLogQueryPageSize" />
             </label>
             <button
               class="icon-button"
@@ -4429,10 +4224,6 @@ function toggleAllImportFileSelection(checked) {
           <p class="muted-line">统计日期：{{ xrayAnalysisDateRange(xrayDetailResult) }}</p>
         </div>
         <div class="actions">
-          <span v-if="serverTimeDisplay" class="server-time-badge">
-            <Clock :size="16" />
-            {{ serverTimeDisplay }}
-          </span>
           <button class="primary-button" type="button" :disabled="!selectedXrayDetailPlayer" @click="openXrayGroupSendDialog">
             <Send :size="18" />
             <span>发送到Q群</span>
@@ -4634,9 +4425,7 @@ function toggleAllImportFileSelection(checked) {
                   <div class="pagination-controls">
                     <label>
                       <span>每页</span>
-                      <select :value="xrayDetailOrePositionPageSize" @change="setXrayDetailOrePositionPageSize($event.target.value)">
-                        <option v-for="size in XRAY_ORE_POSITION_PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</option>
-                      </select>
+                      <AdminSelect :model-value="xrayDetailOrePositionPageSize" :options="adminOrePageSizeOptions" label="每页条数" @update:model-value="setXrayDetailOrePositionPageSize" />
                     </label>
                     <button class="icon-button" type="button" title="上一页" :disabled="xrayDetailOrePositionPage <= 1" @click="setXrayDetailOrePositionPage(xrayDetailOrePositionPage - 1)">
                       <ChevronLeft :size="18" />
@@ -4673,9 +4462,7 @@ function toggleAllImportFileSelection(checked) {
                   <div class="pagination-controls">
                     <label>
                       <span>每页</span>
-                      <select :value="xrayDetailOrePositionPageSize" @change="setXrayDetailOrePositionPageSize($event.target.value)">
-                        <option v-for="size in XRAY_ORE_POSITION_PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</option>
-                      </select>
+                      <AdminSelect :model-value="xrayDetailOrePositionPageSize" :options="adminOrePageSizeOptions" label="每页条数" @update:model-value="setXrayDetailOrePositionPageSize" />
                     </label>
                     <button class="icon-button" type="button" title="上一页" :disabled="xrayDetailOrePositionPage <= 1" @click="setXrayDetailOrePositionPage(xrayDetailOrePositionPage - 1)">
                       <ChevronLeft :size="18" />
@@ -4727,120 +4514,12 @@ function toggleAllImportFileSelection(checked) {
       </div>
     </section>
 
-    <section v-else-if="currentView === 'operationResult'" class="result-page">
-      <div class="topbar">
-        <div>
-          <p class="eyebrow">PlayerLogger</p>
-          <h1>{{ lastOperation?.title || '操作结果' }}</h1>
-        </div>
-        <div class="actions">
-          <span v-if="serverTimeDisplay" class="server-time-badge">
-            <Clock :size="16" />
-            {{ serverTimeDisplay }}
-          </span>
-          <button class="admin-badge" type="button" title="个人中心" @click="openProfilePage">
-            <UserRound :size="16" />
-            {{ currentAdmin }}
-          </button>
-          <button class="secondary-button" type="button" @click="goDashboard">
-            <ArrowLeft :size="18" />
-            <span>返回统计</span>
-          </button>
-          <button class="icon-button ghost" type="button" title="退出登录" @click="logout">
-            <LogOut :size="18" />
-          </button>
-        </div>
-      </div>
-
-      <section class="result-summary-grid">
-        <article class="metric-card compact">
-          <div class="metric-icon blue"><FileText :size="20" /></div>
-          <p>扫描文件</p>
-          <strong>{{ formatNumber(lastOperation?.result?.scannedFiles) }}</strong>
-        </article>
-        <article class="metric-card compact">
-          <div class="metric-icon green"><CheckCircle2 :size="20" /></div>
-          <p>{{ lastOperation?.actionLabel || '成功' }}</p>
-          <strong>{{ formatNumber(lastOperation?.result?.importedFiles) }}</strong>
-        </article>
-        <article class="metric-card compact">
-          <div class="metric-icon amber"><CircleSlash :size="20" /></div>
-          <p>跳过</p>
-          <strong>{{ formatNumber(lastOperation?.result?.skippedFiles) }}</strong>
-        </article>
-        <article class="metric-card compact">
-          <div class="metric-icon red"><XCircle :size="20" /></div>
-          <p>失败</p>
-          <strong>{{ formatNumber(lastOperation?.result?.failedFiles) }}</strong>
-        </article>
-      </section>
-
-      <article class="panel wide">
-        <div class="panel-title">
-          <h2>文件明细</h2>
-          <span>{{ operationFiles.length }} 个文件</span>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>文件</th>
-                <th>服务器</th>
-                <th>状态</th>
-                <th>读取行</th>
-                <th>忽略行</th>
-                <th>说明</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="file in operationFiles" :key="`${file.serverId}:${file.remotePath}`">
-                <td class="path-cell" :title="file.remotePath">{{ fileNameFromPath(file.remotePath) }}</td>
-                <td>{{ file.serverName }}</td>
-                <td>
-                  <span class="status-pill" :class="statusClass(file.status)">
-                    {{ statusLabel(file.status) }}
-                  </span>
-                </td>
-                <td>{{ formatNumber(file.rowCount) }}</td>
-                <td>{{ formatNumber(file.ignoredCount) }}</td>
-                <td class="message-cell">{{ file.message || '-' }}</td>
-              </tr>
-              <tr v-if="!operationFiles.length">
-                <td colspan="6" class="empty">暂无文件结果</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </article>
-    </section>
-
     <template v-else>
+    <div class="admin-dashboard-controls">
     <section class="topbar">
-      <div>
-        <p class="eyebrow">PlayerLogger</p>
-        <h1>玩家日志统计</h1>
-      </div>
       <div class="actions">
-        <span v-if="serverTimeDisplay" class="server-time-badge">
-          <Clock :size="16" />
-          {{ serverTimeDisplay }}
-        </span>
-        <button class="admin-badge" type="button" title="个人中心" @click="openProfilePage">
-          <UserRound :size="16" />
-          {{ currentAdmin }}
-        </button>
         <button class="icon-button ghost" type="button" title="刷新" :disabled="loading" @click="loadAll">
           <RefreshCw :size="18" :class="{ spin: loading }" />
-        </button>
-        <button v-if="filters.serverId !== 'all'" class="secondary-button" type="button" @click="openLogQueryPage(filters.serverId)">
-          <Search :size="18" />
-          <span>查日志 {{ selectedServerName }}</span>
-        </button>
-        <button class="icon-button ghost" type="button" title="设置" @click="openSettingsPage">
-          <Settings :size="18" />
-        </button>
-        <button class="icon-button ghost" type="button" title="退出登录" @click="logout">
-          <LogOut :size="18" />
         </button>
       </div>
     </section>
@@ -4858,6 +4537,7 @@ function toggleAllImportFileSelection(checked) {
         <small v-if="server.serverId !== 'all'">{{ formatNumber(sourceStat(server.serverId, 'totalCount')) }}</small>
       </button>
     </section>
+    </div>
 
     <p v-if="error" class="notice error">{{ error }}</p>
     <p v-if="importMessage" class="notice success">{{ importMessage }}</p>
@@ -4973,6 +4653,7 @@ function toggleAllImportFileSelection(checked) {
     </section>
     </template>
   </main>
+  </AdminLayout>
 
   <div
     v-if="minecraftLaunchNoticeOpen"

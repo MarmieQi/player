@@ -1,0 +1,16 @@
+/* Shared only by the administrator login and authenticated workspace. */
+.admin-workspace, .admin-login {
+  --admin-accent: #465fc9;
+  --admin-accent-hover: #354db3;
+  --admin-accent-soft: #edf1ff;
+  --admin-accent-border: #dfe5fb;
+  --admin-accent-shadow: #526bd41a;
+  --admin-border: #dfe4eb;
+  --admin-text: #253247;
+  --admin-muted: #58677b;
+  color: var(--admin-text);
+  background: #f4f5f7;
+  font-size: 14px;
+  line-height: 1.5;
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+}

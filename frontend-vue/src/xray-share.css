@@ -1,0 +1,78 @@
+/* Analysis details reuse the public report shell and public metric cards. */
+.xray-share-report { --share-v2-surface: #fff; --share-v2-soft-muted: #8b9ab0; }
+.xray-share-report .log-share-content + .log-share-content { margin-top: 18px; }
+.xray-share-report .log-share-target { min-width: 270px; }
+.xray-share-report .log-share-target strong { font-size: 36px; }
+.xray-share-report .log-share-target strong > small { display: inline; font-size: 18px; font-weight: 400; }
+.xray-share-report .xray-share-reasons { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.xray-share-report .xray-share-reasons li { padding: 12px 16px; border-left: 3px solid #edb279; border-radius: 4px 12px 12px 4px; background: #fff8f1; color: #77543b; font-size: 14px; line-height: 1.7; }
+.xray-share-report .xray-share-toggle { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 38px; padding: 8px 12px; border: 1px solid #dce6f4; border-radius: 11px; background: #f1f6ff; color: #365e9d; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.xray-share-report .xray-share-toggle:hover { background: #e7effc; border-color: #bfcee6; }
+.xray-share-report .xray-share-toggle svg { flex-shrink: 0; }
+.xray-share-report .xray-share-rotated { transform: rotate(180deg); }
+.xray-share-report .xray-share-toggle:focus-visible { outline: 2px solid #4661c7; outline-offset: 3px; }
+.xray-share-report .xray-share-evidence { display: grid; gap: 14px; }
+.xray-share-report .xray-share-evidence-card { min-width: 0; padding: 18px; border: 1px solid #e0e8f1; border-radius: 16px; background: #fbfcfe; }
+.xray-share-report .xray-share-evidence-heading { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
+.xray-share-report .xray-share-evidence-number { display: grid; place-items: center; flex-shrink: 0; width: 34px; height: 34px; border-radius: 10px; background: #eaf2ff; color: #416cb0; font-size: 13px; font-weight: 700; }
+.xray-share-report .xray-share-evidence-heading > div { flex: 1; min-width: 0; }
+.xray-share-report .xray-share-evidence-heading h3 { margin: 0 0 6px; color: #26384b; font-size: 15px; line-height: 1.65; overflow-wrap: anywhere; }
+.xray-share-report .xray-share-evidence-heading p { margin: 0; color: #718096; font-size: 12px; line-height: 1.6; }
+.xray-share-report .xray-share-toggle-subtle { min-height: 32px; padding: 5px 9px; background: #fff; color: #62748d; border-color: #e0e8f1; font-size: 12px; }
+.xray-share-report .xray-share-evidence-lines { display: grid; gap: 0; margin: 14px 0 0; padding: 0 0 0 24px; border-top: 1px solid #e6edf5; color: #53677e; }
+.xray-share-report .xray-share-evidence-lines li { padding: 10px 4px; border-bottom: 1px solid #e6edf5; overflow-wrap: anywhere; font-size: 12px; line-height: 1.8; }
+.xray-share-report .xray-share-evidence-lines li:last-child { border-bottom: 0; padding-bottom: 0; }
+.xray-share-report .xray-share-evidence-lines li::marker { color: #8b9ab0; }
+.xray-share-report .xray-share-stat-group { padding: 24px 0; border-top: 1px solid #e8eef4; }
+.xray-share-report .log-share-heading + .xray-share-stat-group { padding-top: 0; border-top: 0; }
+.xray-share-report .xray-share-stat-group:last-child { padding-bottom: 0; }
+.xray-share-report .xray-share-stat-heading { display: flex; align-items: center; gap: 12px; padding: 0; margin: 0 0 14px; }
+.xray-share-report .xray-share-section-icon { display: grid; place-items: center; width: 40px; height: 40px; flex-shrink: 0; border-radius: 12px; color: #416cb0; background: #eaf2ff; }
+.xray-share-report .xray-share-section-icon.is-purple { color: #8159dd; background: #eee9ff; }
+.xray-share-report .xray-share-section-icon.is-orange { color: #c47736; background: #fff0df; }
+.xray-share-report .xray-share-section-title { display: grid; gap: 4px; min-width: 0; flex: 1; }
+.xray-share-report .xray-share-section-title h3 { margin: 0; font-size: 15px; color: #26384b; }
+.xray-share-report .xray-share-section-title small { color: #718096; font-size: 12px; line-height: 1.6; }
+.xray-share-report .share-v2-stat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.xray-share-report .share-v2-stat-card { min-height: 86px; padding: 14px; gap: 11px; align-items: center; border-radius: 14px; box-shadow: none; }
+.xray-share-report .share-v2-stat-icon { width: 34px; height: 34px; border-radius: 10px; }
+.xray-share-report .share-v2-stat-card strong { font-variant-numeric: tabular-nums; font-size: 24px; }
+.xray-share-report .xray-share-duration { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 8px; color: #665695; background: #f4f0fb; font-size: 12px; white-space: nowrap; }
+.xray-share-report .xray-share-session-facts { display: flex; flex-wrap: wrap; gap: 10px 28px; margin: 0 0 16px; }
+.xray-share-report .xray-share-session-facts > div { display: flex; align-items: baseline; flex-wrap: wrap; gap: 5px 10px; min-width: 0; }
+.xray-share-report .xray-share-session-facts dt { display: flex; align-items: center; gap: 7px; font-size: 12px; color: #718096; }
+.xray-share-report .xray-share-session-facts dt svg { color: #8093ad; }
+.xray-share-report .xray-share-session-facts dd { margin: 0; color: #41536b; font-size: 13px; font-weight: 500; line-height: 1.7; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.xray-share-report .xray-share-ore-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.xray-share-report .xray-share-ore-list > div { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 12px; border: 1px solid #e0e8f1; border-radius: 13px; }
+.xray-share-report .xray-share-ore-icon { display: grid; place-items: center; flex-shrink: 0; width: 32px; height: 32px; border-radius: 10px; color: #c47736; background: #fff4e8; }
+.xray-share-report .xray-share-ore-list > div > span:nth-child(2) { font-size: 13px; color: #53677e; overflow-wrap: anywhere; }
+.xray-share-report .xray-share-ore-list strong { margin-left: auto; color: #26384b; font-size: 17px; white-space: nowrap; }
+.xray-share-report .xray-share-ore-list strong small { font-size: 11px; font-weight: 400; color: #8b9ab0; }
+.xray-share-report .log-share-table-wrap { margin-top: 16px; }
+.xray-share-report .log-share-table-wrap .message-cell { min-width: 130px; }
+.xray-share-report .xray-share-empty { margin: 0; color: #718096; font-size: 13px; line-height: 1.8; }
+.xray-share-report .log-share-cards > article > p { overflow-wrap: anywhere; }
+.xray-share-report .log-share-heading + .xray-share-pagination { padding-top: 0; border-top: 0; }
+.xray-share-report .xray-share-back-top { display: flex; margin: 18px auto 0; }
+@media (max-width: 1000px) {
+  .xray-share-report .share-v2-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .xray-share-report .xray-share-ore-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .xray-share-report .log-share-target { min-width: 0; }
+  .xray-share-report .log-share-heading { gap: 12px; }
+  .xray-share-report .log-share-summary article:last-child strong { font-size: 19px; }
+  .xray-share-report .xray-share-session-facts { flex-direction: column; gap: 8px; }
+  .xray-share-report .share-v2-stat-card { min-height: 104px; padding: 12px; gap: 9px; flex-direction: column; align-items: flex-start; }
+  .xray-share-report .share-v2-stat-icon { width: 30px; height: 30px; border-radius: 9px; }
+  .xray-share-report .share-v2-stat-card span { font-size: 11px; }
+  .xray-share-report .xray-share-duration { margin-left: 52px; }
+  .xray-share-report .xray-share-stat-heading { flex-wrap: wrap; row-gap: 9px; }
+  .xray-share-report .xray-share-section-title { flex-basis: calc(100% - 52px); }
+  .xray-share-report .xray-share-section-title small { font-size: 11px; }
+  .xray-share-report .xray-share-evidence-card { padding: 13px; }
+  .xray-share-report .xray-share-evidence-heading { gap: 9px; }
+  .xray-share-report .xray-share-ore-list { grid-template-columns: 1fr; }
+  .xray-share-report .log-share-cards { margin-top: 14px; }
+}
