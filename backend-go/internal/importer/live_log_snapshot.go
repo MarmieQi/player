@@ -32,6 +32,9 @@ const (
 type liveLogSnapshotCache struct {
 	root       string
 	ttl        time.Duration
+	location   *time.Location
+	now        func() time.Time
+	owned      map[string]*liveLogSnapshotEntry
 	initErr    error
 	mu         sync.Mutex
 	entries    map[string]*liveLogSnapshotEntry
@@ -40,6 +43,7 @@ type liveLogSnapshotCache struct {
 }
 
 type liveLogSnapshotEntry struct {
+	day       string
 	files     []RemoteLogFile
 	expiresAt time.Time
 	refs      int
@@ -58,7 +62,10 @@ type liveLogSnapshotLease struct {
 	once  sync.Once
 }
 
-func newLiveLogSnapshotCache(directory string, ttlSeconds int) *liveLogSnapshotCache {
+func newLiveLogSnapshotCache(directory string, ttlSeconds int, location *time.Location) *liveLogSnapshotCache {
+	if location == nil {
+		location = time.Local
+	}
 	root, err := prepareLiveLogSnapshotRoot(directory)
 	ttl := time.Duration(ttlSeconds) * time.Second
 	if ttl < 10*time.Second || ttl > 10*time.Minute {
@@ -66,6 +73,9 @@ func newLiveLogSnapshotCache(directory string, ttlSeconds int) *liveLogSnapshotC
 	}
 	return &liveLogSnapshotCache{
 		root:       root,
+		location:   location,
+		now:        time.Now,
+		owned:      map[string]*liveLogSnapshotEntry{},
 		ttl:        ttl,
 		initErr:    err,
 		entries:    map[string]*liveLogSnapshotEntry{},
@@ -131,11 +141,8 @@ func (c *liveLogSnapshotCache) close() {
 	c.mu.Lock()
 	c.closed = true
 	for key, entry := range c.entries {
-		entry.retired = true
 		delete(c.entries, key)
-		if entry.refs == 0 {
-			remove = append(remove, entry.files...)
-		}
+		remove = append(remove, c.retireLocked(entry)...)
 	}
 	c.mu.Unlock()
 	c.removeFiles(remove)
@@ -167,7 +174,9 @@ func (c *liveLogSnapshotCache) acquire(
 			c.mu.Unlock()
 			return nil, errors.New("当天日志临时缓存已关闭")
 		}
-		if entry := c.entries[key]; entry != nil && time.Now().Before(entry.expiresAt) && !entry.retired {
+		now := c.now()
+		day := c.day(now)
+		if entry := c.entries[key]; entry != nil && entry.day == day && now.Before(entry.expiresAt) && !entry.retired {
 			entry.refs++
 			lease := c.lease(entry)
 			c.mu.Unlock()
@@ -178,7 +187,7 @@ func (c *liveLogSnapshotCache) acquire(
 			flight = &liveLogSnapshotFlight{done: make(chan struct{})}
 			c.refreshing[key] = flight
 			// Refresh belongs to the shared cache, not the first querying task.
-			go c.refresh(key, flight, create)
+			go c.refresh(key, day, flight, create)
 		}
 		c.mu.Unlock()
 		select {
@@ -192,30 +201,58 @@ func (c *liveLogSnapshotCache) acquire(
 	}
 }
 
-func (c *liveLogSnapshotCache) refresh(key string, flight *liveLogSnapshotFlight, create func(context.Context) ([]RemoteLogFile, error)) {
+func (c *liveLogSnapshotCache) refresh(key, day string, flight *liveLogSnapshotFlight, create func(context.Context) ([]RemoteLogFile, error)) {
 	ctx, cancel := context.WithTimeout(context.Background(), liveLogSnapshotReadTimeout)
 	defer cancel()
 	files, err := create(ctx)
+	if err == nil {
+		err = ctx.Err()
+	}
 	var remove []RemoteLogFile
 	c.mu.Lock()
 	delete(c.refreshing, key)
-	if err == nil && c.closed {
+	now := c.now()
+	if c.closed {
 		err = errors.New("当天日志临时缓存已关闭")
 		remove = append(remove, files...)
-	}
-	if err == nil {
+	} else if day != c.day(now) {
+		// Do not publish yesterday's download with a fresh TTL after midnight.
+		// Wake waiters without an error so they retry for the new day.
+		remove = append(remove, files...)
+		err = nil
+	} else if err == nil {
 		if previous := c.entries[key]; previous != nil {
-			previous.retired = true
-			if previous.refs == 0 {
-				remove = append(remove, previous.files...)
-			}
+			remove = append(remove, c.retireLocked(previous)...)
 		}
-		c.entries[key] = &liveLogSnapshotEntry{files: append([]RemoteLogFile(nil), files...), expiresAt: time.Now().Add(c.ttl)}
+		entry := &liveLogSnapshotEntry{day: day, files: append([]RemoteLogFile(nil), files...), expiresAt: now.Add(c.ttl)}
+		c.entries[key] = entry
+		for _, file := range entry.files {
+			c.owned[filepath.Clean(file.Path)] = entry
+		}
 	}
 	flight.err = err
 	close(flight.done)
 	c.mu.Unlock()
 	c.removeFiles(remove)
+}
+
+func (c *liveLogSnapshotCache) day(now time.Time) string {
+	return now.In(c.location).Format("2006-01-02")
+}
+
+// Called under c.mu. Removing a cache key does not end ownership of leased files.
+func (c *liveLogSnapshotCache) retireLocked(entry *liveLogSnapshotEntry) []RemoteLogFile {
+	entry.retired = true
+	if entry.refs != 0 {
+		return nil
+	}
+	for _, file := range entry.files {
+		path := filepath.Clean(file.Path)
+		if c.owned[path] == entry {
+			delete(c.owned, path)
+		}
+	}
+	return entry.files
 }
 
 func (c *liveLogSnapshotCache) lease(entry *liveLogSnapshotEntry) *liveLogSnapshotLease {
@@ -237,7 +274,7 @@ func (l *liveLogSnapshotLease) Release() {
 			l.entry.refs--
 		}
 		if l.entry.retired && l.entry.refs == 0 {
-			remove = append(remove, l.entry.files...)
+			remove = append(remove, l.cache.retireLocked(l.entry)...)
 		}
 		l.cache.mu.Unlock()
 		l.cache.removeFiles(remove)
@@ -404,26 +441,21 @@ func (c *liveLogSnapshotCache) cleanup(now time.Time) {
 	if c == nil || c.initErr != nil {
 		return
 	}
-	protected := map[string]struct{}{}
 	remove := make([]RemoteLogFile, 0)
+	day := c.day(now)
 	c.mu.Lock()
 	for key, entry := range c.entries {
-		if !now.Before(entry.expiresAt) && entry.refs == 0 {
-			entry.retired = true
+		if entry.day != day || !now.Before(entry.expiresAt) {
 			delete(c.entries, key)
-			remove = append(remove, entry.files...)
-			continue
-		}
-		for _, file := range entry.files {
-			protected[filepath.Clean(file.Path)] = struct{}{}
+			remove = append(remove, c.retireLocked(entry)...)
 		}
 	}
 	c.mu.Unlock()
 	c.removeFiles(remove)
-	c.cleanupOrphans(now, protected)
+	c.cleanupOrphans(now)
 }
 
-func (c *liveLogSnapshotCache) cleanupOrphans(now time.Time, protected map[string]struct{}) {
+func (c *liveLogSnapshotCache) cleanupOrphans(now time.Time) {
 	entries, err := os.ReadDir(c.root)
 	if err != nil {
 		return
@@ -438,7 +470,11 @@ func (c *liveLogSnapshotCache) cleanupOrphans(now time.Time, protected map[strin
 			continue
 		}
 		candidate := filepath.Join(c.root, name)
-		if _, ok := protected[filepath.Clean(candidate)]; ok {
+		// Recheck current ownership, rather than a stale copy of the cache keys.
+		c.mu.Lock()
+		_, protected := c.owned[filepath.Clean(candidate)]
+		c.mu.Unlock()
+		if protected {
 			continue
 		}
 		_ = removeLiveLogSnapshotFile(c.root, candidate)
@@ -476,10 +512,19 @@ func isLiveLogSnapshotName(name string) bool {
 }
 
 func mergeTodayLogSnapshotFiles(localFiles, liveFiles []RemoteLogFile, location *time.Location) []RemoteLogFile {
-	if len(liveFiles) == 0 {
+	today := dateOnly(time.Now().In(location), location)
+	current := make([]RemoteLogFile, 0, len(liveFiles))
+	for _, file := range liveFiles {
+		if day := extractLogDate(file.FileName, location); day != nil && day.Equal(today) {
+			current = append(current, file)
+		}
+	}
+	// A query can cross midnight after acquiring its lease. Never let an old
+	// snapshot hide today's local file or duplicate yesterday's archived logs.
+	if len(current) == 0 {
 		return localFiles
 	}
-	today := dateOnly(time.Now().In(location), location)
+	liveFiles = current
 	merged := make([]RemoteLogFile, 0, len(localFiles)+len(liveFiles))
 	for _, file := range localFiles {
 		fileDate := extractLogDate(file.FileName, location)

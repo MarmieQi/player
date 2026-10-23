@@ -384,6 +384,7 @@ func readXrayDiskEvent(reader *bufio.Reader, playerName string, location *time.L
 		Detail1:    values[16],
 		Detail2:    values[17],
 	}
+	populateLogQueryRowDisplayNames(&row)
 	return xrayEvent{
 		row:            row,
 		happenedAt:     time.Unix(happenedAtUnix, happenedAtNanosecond).In(location),

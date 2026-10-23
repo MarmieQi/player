@@ -40,7 +40,7 @@ func NewService(db *sql.DB, cfg config.Config, settingsService *settings.Service
 		cfg:           cfg,
 		settings:      settingsService,
 		parser:        newParser(cfg.Location),
-		liveSnapshots: newLiveLogSnapshotCache(cfg.LiveLogSnapshotDirectory, cfg.LiveLogSnapshotTTLSeconds),
+		liveSnapshots: newLiveLogSnapshotCache(cfg.LiveLogSnapshotDirectory, cfg.LiveLogSnapshotTTLSeconds, cfg.Location),
 	}
 }
 

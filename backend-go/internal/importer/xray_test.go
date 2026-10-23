@@ -167,6 +167,17 @@ func TestXrayDiskStoreRoundTripPreservesEventsAfterWriterEviction(t *testing.T) 
 	if err := store.accept(second); err != nil {
 		t.Fatal(err)
 	}
+	// Evidence includes ordinary blocks as well as rare ores. Display names are
+	// derived on read; the disk format keeps the original block IDs only.
+	ordinary := completeXrayEvent(first.playerName, first.happenedAt.Add(3*time.Hour), 1000)
+	ordinary.row.Detail1 = "minecraft:netherrack"
+	populateLogQueryRowDisplayNames(&ordinary.row)
+	debris := ancientDebrisEvent(first.playerName, first.happenedAt.Add(4*time.Hour), 1001, 1)
+	for _, event := range []xrayEvent{ordinary, debris} {
+		if err := store.accept(event); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := store.closeWriters(); err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +186,18 @@ func TestXrayDiskStoreRoundTripPreservesEventsAfterWriterEviction(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []xrayEvent{first, second}
+	names := map[string]string{
+		"minecraft:deepslate_diamond_ore": "深板岩钻石矿石",
+		"minecraft:netherrack":            "下界岩",
+		"minecraft:ancient_debris":        "远古残骸",
+	}
+	for _, event := range events {
+		wantName, ok := names[event.row.Detail1]
+		if !ok || event.row.Detail1Display != wantName {
+			t.Fatalf("mineral raw ID or Chinese display lost after disk round trip: %#v", event.row)
+		}
+	}
+	want := []xrayEvent{first, second, ordinary, debris}
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("disk events differ after round trip\n got: %#v\nwant: %#v", events, want)
 	}
@@ -270,7 +292,7 @@ func memoryXrayResults(eventsByPlayer map[string][]xrayEvent) []XrayPlayerRiskVi
 }
 
 func completeXrayEvent(playerName string, happenedAt time.Time, lineNumber int64) xrayEvent {
-	return xrayEvent{
+	event := xrayEvent{
 		row: LogQueryRow{
 			FileName:   "player_actions_2026-07-01.csv",
 			FilePath:   "/data/synced-logs/main/player_actions_2026-07-01.csv",
@@ -300,6 +322,8 @@ func completeXrayEvent(playerName string, happenedAt time.Time, lineNumber int64
 		point:          point3{x: 1.25, y: -54, z: 3.75},
 		hasPoint:       true,
 	}
+	populateLogQueryRowDisplayNames(&event.row)
+	return event
 }
 
 func ancientDebrisEvent(playerName string, happenedAt time.Time, lineNumber int64, x float64) xrayEvent {
@@ -313,6 +337,7 @@ func ancientDebrisEvent(playerName string, happenedAt time.Time, lineNumber int6
 	event.row.Z = "0"
 	event.row.Z2 = "0"
 	event.row.Detail1 = "minecraft:ancient_debris"
+	populateLogQueryRowDisplayNames(&event.row)
 	event.blockID = "minecraft:ancient_debris"
 	event.oreType = "ANCIENT_DEBRIS"
 	event.point = point3{x: x, y: 15, z: 0}

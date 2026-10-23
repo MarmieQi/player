@@ -95,7 +95,7 @@ func TestXrayCancellationAndDiskCleanup(t *testing.T) {
 }
 
 func TestCancelledSnapshotWaiterDoesNotCancelSharedRefresh(t *testing.T) {
-	cache := newLiveLogSnapshotCache(t.TempDir(), 120)
+	cache := newLiveLogSnapshotCache(t.TempDir(), 120, time.UTC)
 	defer cache.close()
 	started, finish := make(chan struct{}), make(chan struct{})
 	refreshContext := make(chan context.Context, 1)
