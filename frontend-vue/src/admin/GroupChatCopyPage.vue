@@ -2,11 +2,13 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import FileSyncPage from './FileSyncPage.vue'
 import { apiGet, apiPost, apiPostJson } from '../api.js'
+import { loadChatSyncConfig } from './group-chat-sync-config.js'
 
 defineEmits(['settings'])
 const base = '/api/admin/group-chat'
 const jobKey = 'player-stats-group-chat-copy-job'
 const config = ref({ enabled: false, smbDirectory: '', fileGlob: '*.txt' })
+const configLoaded = ref(false)
 const loading = ref(true)
 const listing = ref(false)
 const starting = ref(false)
@@ -26,8 +28,10 @@ function report(err) { if (!disposed && err.name !== 'AbortError') error.value =
 
 async function refresh() {
   if (disposed || listing.value) return
-  listing.value = true; error.value = ''
+  listing.value = true; error.value = ''; configLoaded.value = false
   try {
+    config.value = await loadChatSyncConfig({ signal: abort.signal })
+    configLoaded.value = true
     const results = await Promise.allSettled([
       config.value.enabled ? apiGet(`${base}/files`, { skipToday: skipToday.value }, { signal: abort.signal }) : Promise.resolve([]),
       apiGet(`${base}/local-files`, {}, { signal: abort.signal })
@@ -57,7 +61,7 @@ function poll(delay = 1000) {
   }, delay)
 }
 async function start() {
-  if (starting.value || running.value || !config.value.enabled) return
+  if (starting.value || running.value || !configLoaded.value || !config.value.enabled) return
   starting.value = true; error.value = ''; message.value = ''
   try {
     job.value = await apiPost(`${base}/copy-jobs`, { skipToday: skipToday.value }, { signal: abort.signal })
@@ -81,7 +85,6 @@ async function deleteLocal(selectedFiles) {
 }
 onMounted(async () => {
   try {
-    config.value = await apiGet(`${base}/config`, {}, { signal: abort.signal })
     let id = ''
     try { id = localStorage.getItem(jobKey) || '' } catch {}
     if (id) {
@@ -96,9 +99,9 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); abort.abort() })
 </script>
 
 <template>
-  <FileSyncPage extension="TXT" scope-name="群服聊天" :remote-files="files" :local-files="localFiles" :job="job" :loading="loading || listing" :starting="starting" :deleting="deleting" :available="config.enabled" v-model:skip-today="skipToday" :error="error" :message="message" @refresh="refresh" @start="start" @delete="deleteLocal">
+  <FileSyncPage extension="TXT" scope-name="群服聊天" :remote-files="files" :local-files="localFiles" :job="job" :loading="loading || listing" :starting="starting" :deleting="deleting" :available="configLoaded && config.enabled" v-model:skip-today="skipToday" :error="error" :message="message" @refresh="refresh" @start="start" @delete="deleteLocal">
     <template #scope><span class="txt-sync-scope">群服聊天</span></template>
-    <template #notice><p v-if="!loading && !config.enabled" class="notice">请先在系统设置中启用并保存群服聊天的 SMB 目录。<button type="button" class="table-action" @click="$emit('settings')">前往设置</button></p></template>
+    <template #notice><p v-if="configLoaded && !config.enabled" class="notice">请先在系统设置中启用并保存群服聊天的 SMB 目录。<button type="button" class="table-action" @click="$emit('settings')">前往设置</button></p></template>
   </FileSyncPage>
 </template>
 <style scoped>

@@ -282,6 +282,9 @@ func (s *XrayAnalysisService) loadPersistedLatest(ctx context.Context, serverID 
 	if err := json.Unmarshal([]byte(payload), &view); err != nil {
 		return XrayAnalysisView{}, false, err
 	}
+	for i := range view.Players {
+		SortXrayPlayerLogsChronologically(&view.Players[i])
+	}
 	return view, true, nil
 }
 
@@ -1486,6 +1489,7 @@ func rowsFromEvents(events []xrayEvent, ctxs ...context.Context) []LogQueryRow {
 		}
 		rows = append(rows, event.row)
 	}
+	SortLogQueryRowsChronologically(rows)
 	return rows
 }
 

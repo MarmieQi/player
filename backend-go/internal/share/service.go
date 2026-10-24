@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"player-stats-backend-go/internal/storage"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -262,6 +263,12 @@ func (s *Service) PlayerDetails(ctx context.Context, token string) (PlayerDetail
 	}, nil
 }
 
+// RowOrder belongs to persisted snapshot metadata, not the public API.
+type logQuerySnapshotMetadata struct {
+	importer.PublicCoordinateLogQueryView
+	RowOrder string `json:"rowOrder,omitempty"`
+}
+
 func (s *Service) CreateLogQueryToken(ctx context.Context, request importer.PublicCoordinateLogQueryRequest) (LogQueryShareTokenResponse, error) {
 	if s.logs == nil {
 		return LogQueryShareTokenResponse{}, errors.New("log query service is unavailable")
@@ -278,7 +285,7 @@ func (s *Service) CreateLogQueryToken(ctx context.Context, request importer.Publ
 	rows := result.Rows
 	result.Rows = []importer.LogQueryRow{}
 	result.DisplayedRows = len(rows)
-	payload, err := json.Marshal(result)
+	payload, err := json.Marshal(logQuerySnapshotMetadata{PublicCoordinateLogQueryView: result, RowOrder: "asc"})
 	if err != nil {
 		return LogQueryShareTokenResponse{}, err
 	}
@@ -359,10 +366,12 @@ func (s *Service) LogQueryDetails(ctx context.Context, token string, page, pageS
 		_, _ = s.db.ExecContext(ctx, `delete from share_links where token = ?`, token)
 		return LogQueryShareDetailsResponse{}, auth.NewHTTPError(httpStatusGone, "链接已过期，请重新在群里查询")
 	}
-	var result importer.PublicCoordinateLogQueryView
-	if err := json.Unmarshal([]byte(payload), &result); err != nil {
+	var metadata logQuerySnapshotMetadata
+	if err := json.Unmarshal([]byte(payload), &metadata); err != nil {
 		return LogQueryShareDetailsResponse{}, err
 	}
+	result := metadata.PublicCoordinateLogQueryView
+	descendingSnapshot := metadata.RowOrder != "asc"
 	pageSize = normalizeLogQueryPageSize(pageSize)
 	var snapshotPages, snapshotRows int
 	if err := s.db.QueryRowContext(ctx, `
@@ -379,6 +388,9 @@ func (s *Service) LogQueryDetails(ctx context.Context, token string, page, pageS
 		page = max(1, min(page, totalPages))
 		start := (page - 1) * pageSize
 		end := min(start+pageSize, totalRows)
+		if descendingSnapshot {
+			start, end = totalRows-end, totalRows-start
+		}
 		firstSnapshotPage := start/logQuerySnapshotPageRows + 1
 		lastSnapshotPage := (max(start, end-1))/logQuerySnapshotPageRows + 1
 		rows, err := s.logQuerySnapshotRows(ctx, token, firstSnapshotPage, lastSnapshotPage)
@@ -392,10 +404,14 @@ func (s *Service) LogQueryDetails(ctx context.Context, token string, page, pageS
 		}
 		if localStart < localEnd {
 			pageRows = rows[localStart:localEnd]
+			if descendingSnapshot {
+				slices.Reverse(pageRows)
+			}
 		}
 	} else {
 		// Compatibility with links created before paged snapshots were introduced.
 		allRows := result.Rows
+		importer.SortLogQueryRowsChronologically(allRows)
 		totalRows = len(allRows)
 		totalPages := max(1, (totalRows+pageSize-1)/pageSize)
 		page = max(1, min(page, totalPages))
@@ -811,6 +827,7 @@ func (s *Service) XrayDetails(ctx context.Context, token string) (XrayShareDetai
 	if err := json.Unmarshal([]byte(payload), &details); err != nil {
 		return XrayShareDetailsResponse{}, err
 	}
+	importer.SortXrayPlayerLogsChronologically(&details.Player)
 	return details, nil
 }
 

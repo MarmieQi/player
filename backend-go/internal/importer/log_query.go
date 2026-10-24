@@ -5,7 +5,6 @@ import (
 	"context"
 	"math"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -273,15 +272,7 @@ func (s *LogQueryService) PublicCoordinate(ctx context.Context, request PublicCo
 			result.FailedFiles++
 		}
 	}
-	sort.Slice(result.Rows, func(i, j int) bool {
-		if result.Rows[i].Date != result.Rows[j].Date {
-			return result.Rows[i].Date > result.Rows[j].Date
-		}
-		if result.Rows[i].Time != result.Rows[j].Time {
-			return result.Rows[i].Time > result.Rows[j].Time
-		}
-		return result.Rows[i].LineNumber > result.Rows[j].LineNumber
-	})
+	SortLogQueryRowsChronologically(result.Rows)
 	result.Rows = publicLogRowsForRequest(result.Rows, request)
 	result.DisplayedRows = len(result.Rows)
 	switch {
@@ -301,7 +292,7 @@ func publicLogRowsForRequest(rows []LogQueryRow, request PublicCoordinateLogQuer
 	}
 	limit := normalizePublicLogLimit(request.Limit)
 	if len(rows) > limit {
-		return rows[:limit]
+		return rows[len(rows)-limit:]
 	}
 	return rows
 }
@@ -715,15 +706,7 @@ func (s *logQueryState) markFinished() {
 		s.status = "FINISHED_WITH_ERRORS"
 	}
 	s.currentFile = ""
-	sort.Slice(s.rows, func(i, j int) bool {
-		if s.rows[i].Date != s.rows[j].Date {
-			return s.rows[i].Date > s.rows[j].Date
-		}
-		if s.rows[i].Time != s.rows[j].Time {
-			return s.rows[i].Time > s.rows[j].Time
-		}
-		return s.rows[i].LineNumber > s.rows[j].LineNumber
-	})
+	SortLogQueryRowsChronologically(s.rows)
 	switch {
 	case s.scannedFiles == 0:
 		s.message = "没有扫描到日期范围内的 CSV 文件"

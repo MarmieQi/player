@@ -193,6 +193,7 @@ func TestSQLitePublicReportsAndPluginHTTP(t *testing.T) {
 		f.request(t, "POST", "/api/share/log-query-tokens", map[string]any{"serverId": "main", "x": 0, "y": 10, "z": 0, "radius": 0}, "plugin", 201, &created)
 		tokens["log"] = created.Token
 		seen := map[int64]bool{}
+		previousKey := ""
 		for page := 1; page <= 3; page++ {
 			var got share.LogQueryShareDetailsResponse
 			f.request(t, "GET", fmt.Sprintf("/api/share/log-query/%s?page=%d&pageSize=100", created.Token, page), nil, "", 200, &got)
@@ -200,6 +201,11 @@ func TestSQLitePublicReportsAndPluginHTTP(t *testing.T) {
 				t.Fatalf("wrong page %+v", got)
 			}
 			for _, r := range got.Rows {
+				key := fmt.Sprintf("%s %s %s %020d", r.Date, r.Time, r.FileName, r.LineNumber)
+				if key < previousKey {
+					t.Fatal("public log time went backwards across pages")
+				}
+				previousKey = key
 				if r.FilePath != "" || seen[r.LineNumber] {
 					t.Fatal("path leak or repeated page row")
 				}

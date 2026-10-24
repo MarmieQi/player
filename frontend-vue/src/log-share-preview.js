@@ -26,7 +26,7 @@ export function createLogSharePreviewData() {
     detail2,
     detail1Display,
     detail2Display,
-  })).reverse()
+  }))
 
   for (const [time, action, x, lineNumber] of [
     ['03:29:26', '放入容器', '64', 5],
@@ -44,7 +44,7 @@ export function createLogSharePreviewData() {
       detail1: 'minecraft:lava_bucket', detail1Display: '熔岩桶', detail2: 'x1',
     })
   }
-  rows.sort((a, b) => b.time.localeCompare(a.time))
+  rows.sort((a, b) => a.time.localeCompare(b.time))
 
   return {
     serverId: 'main',

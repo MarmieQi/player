@@ -104,7 +104,10 @@ func (s *xrayDiskStore) resultsContext(ctx context.Context) ([]XrayPlayerRiskVie
 		if err != nil {
 			return nil, fmt.Errorf("读取玩家 %q 的矿透临时数据失败: %w", playerName, err)
 		}
-		sort.Slice(events, func(i, j int) bool {
+		sort.SliceStable(events, func(i, j int) bool {
+			if events[i].happenedAt.Equal(events[j].happenedAt) {
+				return compareLogQueryRows(events[i].row, events[j].row) < 0
+			}
 			return events[i].happenedAt.Before(events[j].happenedAt)
 		})
 		result := analyzePlayerContext(ctx, playerName, events)
