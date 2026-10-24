@@ -297,6 +297,23 @@ func (s *jobState) markFailed(message string) {
 	s.status = "FAILED"
 	s.message = message
 	s.finishedAt = &now
+	// A failed task cannot leave a file advertised as actively transferring.
+	s.importedFiles, s.skippedFiles, s.failedFiles = 0, 0, 0
+	for _, file := range s.files {
+		if file.status == "RUNNING" {
+			file.status, file.success, file.message = "FAILED", false, message
+			file.finishedAt = &now
+		}
+		switch file.status {
+		case "COPIED", "IMPORTED":
+			s.importedFiles++
+		case "SKIPPED":
+			s.skippedFiles++
+		case "FAILED":
+			s.failedFiles++
+		}
+	}
+	s.scannedFiles = s.importedFiles + s.skippedFiles + s.failedFiles
 }
 
 func (s *jobState) view() ImportJobView {

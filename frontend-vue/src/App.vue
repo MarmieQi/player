@@ -4,6 +4,7 @@ import { formatReportTimeRange } from './public-report-format.js'
 import { logActionOptions } from './admin/log-action-options.js'
 import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS, orderedPageRows } from './admin/pagination.js'
 import { createLatestRequestScope } from './admin/latest-request.js'
+import { createSyncJobPoller } from './admin/sync-job-poller.js'
 import { parseCoordinateInput, savedCoordinateInput, coordinateRangeOptions, coordinateQueryParameters } from './admin/coordinate-input.js'
 import {
   ArrowLeft,
@@ -41,6 +42,7 @@ import {
 import { apiDelete, apiGet, apiPost, apiPostJson, clearAuthToken, getAuthToken, setAuthToken } from './api'
 import { isBucketLogAction, logQueryActionDisplay, logQuerySummaryDetailText, logShareActionClass } from './log-presentation'
 import { adminNavigationId } from './admin/navigation'
+import { parseTaskLocation, resolveTaskServer, taskLocation } from './admin/task-navigation.js'
 import { LOG_QUERY_TYPE_COORDINATE, LOG_QUERY_TYPE_PLAYER_KEYWORD, LOG_QUERY_TYPE_XRAY, normalizeLogQueryMode, logFeatureLocation, parseLogFeatureLocation } from './admin/log-feature-navigation'
 
 const AdminLayout = defineAsyncComponent(() => import('./admin/AdminLayout.vue'))
@@ -132,7 +134,25 @@ const passwordForm = ref({
   confirmPassword: ''
 })
 let importJobTimer = null
-let syncJobTimer = null
+const syncJobPoller = createSyncJobPoller({
+  load: (id, signal) => apiGet(`/api/import/sync-jobs/${encodeURIComponent(id)}`, {}, { signal }),
+  onUpdate: job => { syncJob.value = job; syncingFiles.value = isActiveJob(job); error.value = '' },
+  onFinished: async (job, request) => {
+    importMessage.value = jobSummaryMessage('sync', job)
+    await loadSyncLocalFiles(request)
+  },
+  onError: err => {
+    handleApiError(err)
+    if (err.status === 401 || err.status === 404) {
+      syncingFiles.value = false
+      syncJob.value = null
+      if (err.status === 404) clearSavedJobId('sync')
+      return false
+    }
+    return true
+  }
+})
+let syncFileLoadVersion = 0
 let shareTimer = null
 const serverTimeDisplay = ref('')
 let serverTimeOffset = 0
@@ -686,17 +706,11 @@ async function loadAll() {
 }
 
 async function openImportPage(serverId = filters.value.serverId) {
-  const targetServerId = serverId && serverId !== 'all' ? serverId : filters.value.serverId
-  if (targetServerId === 'all') {
-    error.value = '请先选择主服或 2服，再解析 CSV'
-    currentView.value = 'dashboard'
-    window.location.hash = ''
-    return
-  }
+  const targetServerId = resolveTaskServer(serverId, filters.value.serverId, serverOptions.value)
 
   filters.value.serverId = targetServerId
   currentView.value = 'importPage'
-  window.location.hash = '#/import'
+  window.location.hash = taskLocation('import', targetServerId)
   stopImportJobPolling()
   importJob.value = null
   importing.value = false
@@ -928,17 +942,11 @@ async function deleteSelectedImportRecords() {
 }
 
 async function openSyncPage(serverId = filters.value.serverId) {
-  const targetServerId = serverId && serverId !== 'all' ? serverId : filters.value.serverId
-  if (targetServerId === 'all') {
-    error.value = '请先选择主服或 2服，再复制 CSV'
-    currentView.value = 'dashboard'
-    window.location.hash = ''
-    return
-  }
+  const targetServerId = resolveTaskServer(serverId, filters.value.serverId, serverOptions.value)
 
   filters.value.serverId = targetServerId
   currentView.value = 'syncPage'
-  window.location.hash = '#/sync'
+  window.location.hash = taskLocation('sync', targetServerId)
   stopSyncJobPolling()
   syncJob.value = null
   syncingFiles.value = false
@@ -951,22 +959,26 @@ async function openSyncPage(serverId = filters.value.serverId) {
 }
 
 async function loadSyncPageFiles() {
+  const serverId = filters.value.serverId
+  const version = ++syncFileLoadVersion
+  const isCurrent = () => version === syncFileLoadVersion && filters.value.serverId === serverId && currentView.value === 'syncPage'
   syncPageLoading.value = true
   error.value = ''
   try {
     const params = {
-      serverId: filters.value.serverId === 'all' ? '' : filters.value.serverId
+      serverId
     }
     const [remoteData, localData] = await Promise.all([
       apiGet('/api/import/remote-files', params),
       apiGet('/api/import/files', params)
     ])
+    if (!isCurrent()) return
     remoteFiles.value = asArray(remoteData)
     syncLocalFiles.value = asArray(localData)
   } catch (err) {
-    handleApiError(err)
+    if (isCurrent()) handleApiError(err)
   } finally {
-    syncPageLoading.value = false
+    if (isCurrent()) syncPageLoading.value = false
   }
 }
 
@@ -998,39 +1010,20 @@ async function startSyncJob() {
 }
 
 function pollSyncJob(jobId) {
-  stopSyncJobPolling()
-  syncJobTimer = window.setInterval(async () => {
-    try {
-      const job = await apiGet(`/api/import/sync-jobs/${jobId}`)
-      syncJob.value = job
-      if (!isActiveJob(job)) {
-        stopSyncJobPolling()
-        syncingFiles.value = false
-        importMessage.value = jobSummaryMessage('sync', job)
-        await loadSyncLocalFiles()
-      }
-    } catch (err) {
-      stopSyncJobPolling()
-      syncingFiles.value = false
-      handleApiError(err)
-    }
-  }, 1000)
+  syncJobPoller.start(jobId)
 }
 
 function stopSyncJobPolling() {
-  if (syncJobTimer) {
-    window.clearInterval(syncJobTimer)
-    syncJobTimer = null
-  }
+  syncJobPoller.stop()
 }
 
-async function loadSyncLocalFiles() {
+async function loadSyncLocalFiles({ signal, isCurrent = () => true } = {}) {
+  const serverId = filters.value.serverId
   try {
-    syncLocalFiles.value = asArray(await apiGet('/api/import/files', {
-      serverId: filters.value.serverId === 'all' ? '' : filters.value.serverId
-    }))
+    const files = await apiGet('/api/import/files', { serverId }, { signal })
+    if (isCurrent() && filters.value.serverId === serverId && currentView.value === 'syncPage') syncLocalFiles.value = asArray(files)
   } catch (err) {
-    handleApiError(err)
+    if (isCurrent() && err.name !== 'AbortError') handleApiError(err)
   }
 }
 
@@ -1063,6 +1056,7 @@ async function deleteSelectedLocalCsv(files) {
 }
 
 async function restoreSyncJob() {
+  const serverId = filters.value.serverId
   const jobId = savedJobId('sync')
   if (!jobId) {
     return
@@ -1070,6 +1064,7 @@ async function restoreSyncJob() {
 
   try {
     const job = await apiGet(`/api/import/sync-jobs/${jobId}`)
+    if (filters.value.serverId !== serverId || currentView.value !== 'syncPage' || syncingFiles.value || (syncJob.value?.jobId && syncJob.value.jobId !== jobId)) return
     syncJob.value = job
     syncingFiles.value = isActiveJob(job)
     importMessage.value = isActiveJob(job) ? '复制任务进行中' : jobSummaryMessage('sync', job)
@@ -1077,7 +1072,16 @@ async function restoreSyncJob() {
       pollSyncJob(job.jobId)
     }
   } catch (err) {
-    clearSavedJobId('sync')
+    if (filters.value.serverId !== serverId || currentView.value !== 'syncPage') return
+    if (err.status === 404) clearSavedJobId('sync')
+    else {
+      handleApiError(err)
+      if (err.status !== 401) {
+        syncJob.value = { jobId, status: 'RUNNING', files: [] }
+        syncingFiles.value = true
+        pollSyncJob(jobId)
+      }
+    }
   }
 }
 
@@ -1838,9 +1842,7 @@ function selectServer(serverId) {
 // The shell emits intent; page loaders retain ownership of data and task state.
 async function navigateAdmin(id) {
   if (currentView.value === 'settingsPage' && id !== 'settings' && settingsPage.value && !settingsPage.value.canLeave()) return
-  const serverId = filters.value.serverId === 'all'
-    ? (serverOptions.value[0]?.serverId || 'main')
-    : filters.value.serverId
+  const serverId = resolveTaskServer(filters.value.serverId, filters.value.serverId, serverOptions.value)
   const queryServerId = ['logQueryPage', 'xrayAnalysisPage', 'xrayDetailPage'].includes(currentView.value) ? logQueryServerId.value : serverId
   stopImportJobPolling()
   stopSyncJobPolling()
@@ -1866,7 +1868,11 @@ async function handleAdminHashChange() {
     return
   }
   const route = parseLogFeatureLocation(hash)
-  if (route) {
+  const taskRoute = parseTaskLocation(hash)
+  if (taskRoute) {
+    const serverId = resolveTaskServer(taskRoute.serverId, filters.value.serverId, serverOptions.value)
+    if (currentView.value === taskRoute.view && filters.value.serverId === serverId) return
+  } else if (route) {
     const serverId = route.serverId || (filters.value.serverId === 'all' ? 'main' : filters.value.serverId)
     if (currentView.value === route.view && logQueryServerId.value === serverId
         && logQueryMode.value === route.mode
@@ -1885,6 +1891,7 @@ async function handleAdminHashChange() {
 async function openInitialViewFromHash() {
   const hash = window.location.hash || ''
   const featureRoute = parseLogFeatureLocation(hash)
+  const taskRoute = parseTaskLocation(hash)
   if (featureRoute) {
     const serverId = featureRoute.serverId || filters.value.serverId
     if (featureRoute.view === 'xrayDetailPage') await openXrayDetailPage(serverId, featureRoute.playerName)
@@ -1894,10 +1901,9 @@ async function openInitialViewFromHash() {
     currentView.value = 'txtCopyPage'
   } else if (hash === '#/group-chat') {
     currentView.value = 'groupChatPage'
-  } else if (hash === '#/sync') {
-    await openSyncPage()
-  } else if (hash === '#/import') {
-    await openImportPage()
+  } else if (taskRoute) {
+    if (taskRoute.view === 'syncPage') await openSyncPage(taskRoute.serverId)
+    else await openImportPage(taskRoute.serverId)
   } else if (hash === '#/profile') {
     openProfilePage()
   } else if (hash === '#/settings') {

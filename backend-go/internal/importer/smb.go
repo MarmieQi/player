@@ -413,9 +413,6 @@ func (s *Service) copyArchiveFiles(ctx context.Context, remoteFiles []RemoteLogF
 		if err := ctx.Err(); err != nil {
 			return results, err
 		}
-		if listener != nil {
-			listener.FileStarted(source.ID, source.Name, file)
-		}
 		logDate := extractLogDate(file.FileName, s.cfg.Location)
 		effectiveDate := logDate
 		if effectiveDate == nil {
@@ -428,12 +425,16 @@ func (s *Service) copyArchiveFiles(ctx context.Context, remoteFiles []RemoteLogF
 			continue
 		}
 		if info, e := os.Stat(file.Path); e == nil && info.Mode().IsRegular() && info.Size() == file.Size && info.ModTime().UnixMilli() == file.LastModified.UnixMilli() {
+			results = appendResult(results, listener, skippedResult(source.ID, source.Name, file.Path, "本地文件未变化"))
 			continue
 		}
 		if s.cfg.MaxFilesPerRun > 0 && processed >= s.cfg.MaxFilesPerRun {
 			break
 		}
 		processed++
+		if listener != nil {
+			listener.FileStarted(source.ID, source.Name, file)
+		}
 		copied, err := copyFile(file)
 		if err != nil {
 			results = appendResult(results, listener, failedResult(source.ID, source.Name, file.Path, err.Error()))
