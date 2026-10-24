@@ -1,8 +1,9 @@
 # One-shot migration. The old MySQL container must still be running.
+# The tool is a separate image under the existing public backend package.
 # Supply the OLD .env; credentials are never passed as command arguments.
 services:
   config-migrate:
-    image: ghcr.io/marmieqi/player-config-migrate:${IMAGE_TAG:?请指定本次 SQLite 版本的完整提交 SHA}
+    image: ghcr.io/marmieqi/player-backend:config-migrate-${IMAGE_TAG:?请指定本次 SQLite 版本的完整提交 SHA}
     environment:
       PLAYER_LOGS_ZONE_ID: Asia/Shanghai
       MYSQL_DATABASE: ${MYSQL_DATABASE:-player_stats}

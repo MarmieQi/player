@@ -88,7 +88,7 @@ class ComposeConfigTests(unittest.TestCase):
         service = json.loads(result.stdout.replace("$$", "$"))["services"]["config-migrate"]
         self.assertNotIn("fixture $secret", " ".join(service["command"]))
         self.assertEqual(service["environment"]["MYSQL_PASSWORD"], "fixture $secret # value")
-        self.assertTrue(service["image"].endswith(":fixture-sha"))
+        self.assertEqual(service["image"], "ghcr.io/marmieqi/player-backend:config-migrate-fixture-sha")
 
     def test_forwarded_backend_environment_is_actually_read(self):
         services = self.config()
