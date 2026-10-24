@@ -72,34 +72,35 @@ type LogQueryRow struct {
 }
 
 type LogQueryView struct {
-	RangeMode     string        `json:"rangeMode,omitempty"`
-	Radius        *float64      `json:"radius,omitempty"`
-	JobID         string        `json:"jobId"`
-	ServerID      string        `json:"serverId"`
-	ServerName    string        `json:"serverName"`
-	Status        string        `json:"status"`
-	StartedAt     *time.Time    `json:"startedAt"`
-	FinishedAt    *time.Time    `json:"finishedAt"`
-	FromDate      *apitype.Date `json:"fromDate"`
-	ToDate        *apitype.Date `json:"toDate"`
-	X1            *float64      `json:"x1"`
-	Y1            *float64      `json:"y1"`
-	Z1            *float64      `json:"z1"`
-	X2            *float64      `json:"x2"`
-	Y2            *float64      `json:"y2"`
-	Z2            *float64      `json:"z2"`
-	Dimension     string        `json:"dimension"`
-	ScannedFiles  int           `json:"scannedFiles"`
-	ScannedRows   int64         `json:"scannedRows"`
-	MatchedRows   int64         `json:"matchedRows"`
-	DisplayedRows int           `json:"displayedRows"`
-	Page          int           `json:"page"`
-	PageSize      int           `json:"pageSize"`
-	TotalPages    int           `json:"totalPages"`
-	FailedFiles   int           `json:"failedFiles"`
-	CurrentFile   string        `json:"currentFile"`
-	Message       string        `json:"message"`
-	Rows          []LogQueryRow `json:"rows"`
+	RangeMode     string            `json:"rangeMode,omitempty"`
+	Radius        *float64          `json:"radius,omitempty"`
+	JobID         string            `json:"jobId"`
+	ServerID      string            `json:"serverId"`
+	ServerName    string            `json:"serverName"`
+	Status        string            `json:"status"`
+	StartedAt     *time.Time        `json:"startedAt"`
+	FinishedAt    *time.Time        `json:"finishedAt"`
+	FromDate      *apitype.Date     `json:"fromDate"`
+	ToDate        *apitype.Date     `json:"toDate"`
+	X1            *float64          `json:"x1"`
+	Y1            *float64          `json:"y1"`
+	Z1            *float64          `json:"z1"`
+	X2            *float64          `json:"x2"`
+	Y2            *float64          `json:"y2"`
+	Z2            *float64          `json:"z2"`
+	Dimension     string            `json:"dimension"`
+	ScannedFiles  int               `json:"scannedFiles"`
+	ScannedRows   int64             `json:"scannedRows"`
+	MatchedRows   int64             `json:"matchedRows"`
+	DisplayedRows int               `json:"displayedRows"`
+	Page          int               `json:"page"`
+	PageSize      int               `json:"pageSize"`
+	SortOrder     apitype.SortOrder `json:"sortOrder"`
+	TotalPages    int               `json:"totalPages"`
+	FailedFiles   int               `json:"failedFiles"`
+	CurrentFile   string            `json:"currentFile"`
+	Message       string            `json:"message"`
+	Rows          []LogQueryRow     `json:"rows"`
 }
 
 type PublicCoordinateLogQueryRequest struct {
@@ -172,7 +173,14 @@ func (s *LogQueryService) Start(ctx context.Context, request LogQueryRequest) (L
 }
 
 func (s *LogQueryService) Latest(ctx context.Context, serverID, queryType string, page, pageSize int) (LogQueryView, error) {
-	serverID, err := requireLogQueryServer(serverID)
+	return s.LatestSorted(ctx, serverID, queryType, page, pageSize, "asc")
+}
+func (s *LogQueryService) LatestSorted(ctx context.Context, serverID, queryType string, page, pageSize int, sortOrder string) (LogQueryView, error) {
+	order, err := apitype.ParseSortOrder(sortOrder)
+	if err != nil {
+		return LogQueryView{}, auth.NewHTTPError(400, err.Error())
+	}
+	serverID, err = requireLogQueryServer(serverID)
 	if err != nil {
 		return LogQueryView{}, err
 	}
@@ -185,13 +193,15 @@ func (s *LogQueryService) Latest(ctx context.Context, serverID, queryType string
 	state := s.latest[key]
 	s.mu.Unlock()
 	if state != nil {
-		return state.view(page, pageSize), nil
+		return state.sortedView(page, pageSize, order), nil
 	}
 	source, ok := s.importer.sourceByID(ctx, serverID)
 	if !ok {
 		return LogQueryView{}, auth.NewHTTPError(404, "找不到服务器："+serverID)
 	}
-	return idleLogQueryView(source.ID, source.Name, pageSize), nil
+	view := idleLogQueryView(source.ID, source.Name, pageSize)
+	view.SortOrder = order
+	return view, nil
 }
 
 func (s *LogQueryService) Clear(ctx context.Context, serverID, queryType string) (LogQueryView, error) {
@@ -651,6 +661,7 @@ type logQueryState struct {
 	currentFile  string
 	message      string
 	rows         []LogQueryRow
+	rowsDirty    bool
 }
 
 func newLogQueryState(serverID, serverName string, criteria logQueryCriteria) *logQueryState {
@@ -690,6 +701,7 @@ func (s *logQueryState) addScannedRow() {
 func (s *logQueryState) addRow(row LogQueryRow) {
 	s.mu.Lock()
 	s.rows = append(s.rows, row)
+	s.rowsDirty = true
 	s.mu.Unlock()
 }
 
@@ -707,6 +719,7 @@ func (s *logQueryState) markFinished() {
 	}
 	s.currentFile = ""
 	SortLogQueryRowsChronologically(s.rows)
+	s.rowsDirty = false
 	switch {
 	case s.scannedFiles == 0:
 		s.message = "没有扫描到日期范围内的 CSV 文件"
@@ -733,8 +746,15 @@ func (s *logQueryState) markFailed(message string) {
 }
 
 func (s *logQueryState) view(page, pageSize int) LogQueryView {
+	return s.sortedView(page, pageSize, apitype.SortAscending)
+}
+func (s *logQueryState) sortedView(page, pageSize int, order apitype.SortOrder) LogQueryView {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.rowsDirty {
+		SortLogQueryRowsChronologically(s.rows)
+		s.rowsDirty = false
+	}
 	pageSize = normalizeLogPageSize(pageSize)
 	totalPages := 0
 	if len(s.rows) > 0 {
@@ -751,7 +771,7 @@ func (s *logQueryState) view(page, pageSize int) LogQueryView {
 		start = len(s.rows)
 	}
 	end := min(start+pageSize, len(s.rows))
-	rows := append([]LogQueryRow(nil), s.rows[start:end]...)
+	rows := apitype.CopyOrderedRange(s.rows, start, end, order)
 	startedAt := s.startedAt
 	rangeMode := ""
 	if s.criteria.queryType == queryTypeCoordinate {
@@ -784,6 +804,7 @@ func (s *logQueryState) view(page, pageSize int) LogQueryView {
 		DisplayedRows: len(rows),
 		Page:          page,
 		PageSize:      pageSize,
+		SortOrder:     order,
 		TotalPages:    totalPages,
 		FailedFiles:   s.failedFiles,
 		CurrentFile:   s.currentFile,
@@ -800,6 +821,7 @@ func idleLogQueryView(serverID, serverName string, pageSize int) LogQueryView {
 		Status:      "IDLE",
 		Page:        1,
 		PageSize:    pageSize,
+		SortOrder:   apitype.SortAscending,
 		Message:     "还没有查询记录",
 		Rows:        []LogQueryRow{},
 		TotalPages:  0,

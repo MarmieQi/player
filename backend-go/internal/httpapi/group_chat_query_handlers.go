@@ -34,6 +34,6 @@ func (s *Server) groupChatQueryPage(w http.ResponseWriter, r *http.Request) {
 	if value := r.URL.Query().Get("pageSize"); value != "" {
 		size, _ = strconv.Atoi(value)
 	}
-	result, err := s.groupChatQuery.Page(r.PathValue("snapshotId"), page, size)
+	result, err := s.groupChatQuery.SortedPage(r.PathValue("snapshotId"), page, size, r.URL.Query().Get("sortOrder"))
 	s.writeHTTPErrorResult(w, 200, result, err)
 }

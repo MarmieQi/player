@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"player-stats-backend-go/internal/apitype"
 	"player-stats-backend-go/internal/config"
 	"player-stats-backend-go/internal/storage"
 	"testing"
@@ -35,6 +36,69 @@ func TestAdminLogPagesUseGlobalChronologicalOrder(t *testing.T) {
 			}
 			previous = &row
 		}
+	}
+}
+
+func TestAdminSortedPagesAcrossDatesKeepSourceUnchanged(t *testing.T) {
+	state := newLogQueryState("main", "主服", logQueryCriteria{})
+	defer state.task.cancel()
+	for i := 600; i >= 0; i-- {
+		day := "2026-10-12"
+		if i >= 300 {
+			day = "2026-10-13"
+		}
+		state.addRow(LogQueryRow{Date: day, Time: "00:00:00", FileName: "logs.csv", LineNumber: int64(i + 1)})
+	}
+	state.markFinished()
+	for _, order := range []apitype.SortOrder{apitype.SortAscending, apitype.SortDescending, apitype.SortAscending} {
+		for _, size := range []int{50, 200, 500} {
+			seen := 0
+			for page := 1; seen < 601; page++ {
+				view := state.sortedView(page, size, order)
+				if view.SortOrder != order {
+					t.Fatal(view.SortOrder)
+				}
+				for _, row := range view.Rows {
+					want := int64(seen + 1)
+					if order == apitype.SortDescending {
+						want = int64(601 - seen)
+					}
+					if row.LineNumber != want {
+						t.Fatalf("%s size %d index %d: %+v", order, size, seen, row)
+					}
+					seen++
+				}
+			}
+			if seen != 601 {
+				t.Fatal(seen)
+			}
+		}
+	}
+	if state.view(1, 200).Rows[0].LineNumber != 1 {
+		t.Fatal("source snapshot changed")
+	}
+}
+
+func TestPartialAndFailedLogResultsStaySortedAfterNewRows(t *testing.T) {
+	state := newLogQueryState("main", "主服", logQueryCriteria{})
+	defer state.task.cancel()
+	state.markRunning()
+	state.addRow(LogQueryRow{Date: "2026-10-13", Time: "00:00:00", LineNumber: 2})
+	state.addRow(LogQueryRow{Date: "2026-10-12", Time: "00:00:00", LineNumber: 1})
+	if got := state.view(1, 200); got.Rows[0].LineNumber != 1 {
+		t.Fatal("running result not sorted")
+	}
+	state.addRow(LogQueryRow{Date: "2026-10-14", Time: "00:00:00", LineNumber: 3})
+	state.markFailed("test interruption")
+	got := state.sortedView(1, 200, apitype.SortDescending)
+	if got.Rows[0].LineNumber != 3 || got.Rows[2].LineNumber != 1 {
+		t.Fatal("partial result not globally reversed")
+	}
+	if state.rowsDirty {
+		t.Fatal("clean snapshot remains dirty")
+	}
+	if state.view(1, 200).Rows[0].LineNumber != 1 {
+		t.Fatal("direction changed source snapshot")
 	}
 }
 

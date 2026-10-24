@@ -2,7 +2,8 @@
 import { computed, defineAsyncComponent, onMounted, onUnmounted, ref } from 'vue'
 import { formatReportTimeRange } from './public-report-format.js'
 import { logActionOptions } from './admin/log-action-options.js'
-import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS } from './admin/pagination.js'
+import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS, orderedPageRows } from './admin/pagination.js'
+import { createLatestRequestScope } from './admin/latest-request.js'
 import { parseCoordinateInput, savedCoordinateInput, coordinateRangeOptions, coordinateQueryParameters } from './admin/coordinate-input.js'
 import {
   ArrowLeft,
@@ -134,7 +135,6 @@ const SYNC_JOB_STORAGE_KEY = 'player-stats-last-sync-jobs'
 const LOG_QUERY_FORM_STORAGE_KEY = 'player-stats-log-query-forms'
 const LOG_TEXT_QUERY_FORM_STORAGE_KEY = 'player-stats-log-text-query-forms'
 const LOG_XRAY_ANALYSIS_FORM_STORAGE_KEY = 'player-stats-log-xray-analysis-forms'
-const LOG_QUERY_PAGE_SIZE_OPTIONS = PAGE_SIZE_OPTIONS
 const XRAY_ORE_POSITION_PAGE_SIZE_OPTIONS = PAGE_SIZE_OPTIONS
 const LOG_SHARE_PAGE_SIZE_OPTIONS = [50, 100, 200]
 const ACTIVE_JOB_STATUSES = ['PENDING', 'RUNNING', 'CANCELLING']
@@ -167,6 +167,8 @@ const xrayAnalysisResults = ref({})
 const logQueryLoading = ref({})
 const xrayAnalysisLoading = ref({})
 const logQueryPages = ref({})
+const logQuerySortOrders = ref({})
+const logQueryRequests = createLatestRequestScope()
 const logQueryPageSizes = ref({})
 const selectedLogQueryRow = ref(null)
 let logQueryTimer = null
@@ -348,6 +350,7 @@ const xrayDetailEvidenceExpanded = ref(false)
 const xrayDetailEvidenceRowExpandedKeys = ref(new Set())
 const xrayDetailOrePositionsExpanded = ref(false)
 const xrayDetailOrePositionPage = ref(1)
+const xrayDetailSortOrder = ref('asc')
 const xrayDetailOrePositionPageSize = ref(DEFAULT_PAGE_SIZE)
 const xrayGroupSendDialogOpen = ref(false)
 const xrayGroupSendLoading = ref(false)
@@ -368,10 +371,11 @@ const xraySharePagedRareOreRows = computed(() => pagedXrayRows(
   xrayShareOrePositionPage.value,
   xrayShareOrePositionPageSize.value
 ))
-const xrayDetailPagedRareOreRows = computed(() => pagedXrayRows(
+const xrayDetailPagedRareOreRows = computed(() => orderedPageRows(
   xrayDetailRareOreRows.value,
   xrayDetailOrePositionPage.value,
-  xrayDetailOrePositionPageSize.value
+  xrayDetailOrePositionPageSize.value,
+  xrayDetailSortOrder.value
 ))
 const xrayShareOrePositionOffset = computed(() => (clampPage(xrayShareOrePositionPage.value, xrayShareOrePositionTotalPages.value) - 1) * xrayShareOrePositionPageSize.value)
 const xrayDetailOrePositionOffset = computed(() => (clampPage(xrayDetailOrePositionPage.value, xrayDetailOrePositionTotalPages.value) - 1) * xrayDetailOrePositionPageSize.value)
@@ -388,6 +392,7 @@ const selectedLogQueryLoading = computed(() => (
     ? Boolean(xrayAnalysisLoading.value[logQueryStateKey(logQueryServerId.value, LOG_QUERY_TYPE_XRAY)])
     : Boolean(logQueryLoading.value[logQueryStateKey(logQueryServerId.value)])
 ))
+const selectedLogQuerySortOrder = computed(() => logQuerySortOrders.value[logQueryStateKey(logQueryServerId.value)] || 'asc')
 const selectedLogQueryPage = computed(() => selectedLogQueryResult.value?.page || logQueryPages.value[logQueryStateKey(logQueryServerId.value)] || 1)
 const selectedLogQueryPageSize = computed(() => selectedLogQueryResult.value?.pageSize || logQueryPageSizes.value[logQueryStateKey(logQueryServerId.value)] || DEFAULT_PAGE_SIZE)
 const selectedLogQueryTotalPages = computed(() => selectedLogQueryResult.value?.totalPages || 0)
@@ -412,6 +417,7 @@ onUnmounted(() => {
   stopImportJobPolling()
   stopSyncJobPolling()
   stopLogQueryPolling()
+  logQueryRequests.dispose()
 })
 
 function openSharePageFromPath() {
@@ -623,6 +629,8 @@ async function logout() {
   stopImportJobPolling()
   stopSyncJobPolling()
   stopLogQueryPolling()
+  logQueryRequests.dispose()
+  logQueryLoading.value = {}
   stopServerTimeTicker()
   await apiPost('/api/auth/logout').catch(() => {})
   clearAuthToken()
@@ -1044,31 +1052,31 @@ async function loadLogFeatureState(serverId, silent = false, queryType = logQuer
   return loadLogQueryState(serverId, silent, queryType)
 }
 
-async function loadLogQueryState(serverId, silent = false, queryType = logQueryMode.value) {
+async function loadLogQueryState(serverId, silent = false, queryType = logQueryMode.value, overrides = {}) {
   const key = logQueryStateKey(serverId, queryType)
-  if (!silent) {
-    logQueryLoading.value = { ...logQueryLoading.value, [key]: true }
-  }
+  if (silent && logQueryLoading.value[key]) return
+  const request = logQueryRequests.begin(key)
+  if (!silent) logQueryLoading.value = { ...logQueryLoading.value, [key]: true }
   try {
     const result = await apiGet('/api/import/log-query-jobs/latest', {
-      serverId,
-      queryType,
+      serverId, queryType,
       page: logQueryPages.value[key] || 1,
-      pageSize: logQueryPageSizes.value[key] || DEFAULT_PAGE_SIZE
-    })
+      pageSize: logQueryPageSizes.value[key] || DEFAULT_PAGE_SIZE,
+      sortOrder: logQuerySortOrders.value[key] || 'asc',
+      ...overrides
+    }, { signal: request.signal })
+    if (!logQueryRequests.isCurrent(key, request)) return
     logQueryPages.value = { ...logQueryPages.value, [key]: result.page || 1 }
-    logQueryPageSizes.value = { ...logQueryPageSizes.value, [key]: result.pageSize || logQueryPageSizes.value[key] || DEFAULT_PAGE_SIZE }
-    // Reset once when entering the idle state, not on every status refresh.
-    // A finished query with zero matches still has a result and retains its dates.
-    if (result.status === 'IDLE' && logQueryResults.value[key]?.status !== 'IDLE') {
-      resetLogQueryDates(serverId, queryType)
-    }
+    logQueryPageSizes.value = { ...logQueryPageSizes.value, [key]: result.pageSize || DEFAULT_PAGE_SIZE }
+    logQuerySortOrders.value = { ...logQuerySortOrders.value, [key]: result.sortOrder || 'asc' }
+    if (result.status === 'IDLE' && logQueryResults.value[key]?.status !== 'IDLE') resetLogQueryDates(serverId, queryType)
     logQueryResults.value = { ...logQueryResults.value, [key]: result }
   } catch (err) {
-    handleApiError(err)
+    if (logQueryRequests.isCurrent(key, request) && err.name !== 'AbortError') handleApiError(err)
   } finally {
-    if (!silent) {
+    if (logQueryRequests.isCurrent(key, request)) {
       logQueryLoading.value = { ...logQueryLoading.value, [key]: false }
+      logQueryRequests.finish(key, request)
     }
   }
 }
@@ -1093,6 +1101,7 @@ async function loadXrayAnalysisState(serverId, silent = false) {
 async function startLogQuery(serverId) {
   const queryType = logQueryMode.value
   const key = logQueryStateKey(serverId, queryType)
+  logQueryRequests.cancel(key)
   error.value = ''
   importMessage.value = ''
   logQueryPages.value = { ...logQueryPages.value, [key]: 1 }
@@ -1130,6 +1139,8 @@ async function clearLogQuery(serverId) {
   const key = logQueryStateKey(serverId, queryType)
   const ok = window.confirm(`确定清空 ${serverNameById(serverId)} 的${logQueryModeLabel(queryType)}结果吗？`)
   if (!ok) return
+  logQueryRequests.cancel(key)
+  logQueryLoading.value = { ...logQueryLoading.value, [key]: true }
   error.value = ''
   importMessage.value = ''
   try {
@@ -1147,6 +1158,8 @@ async function clearLogQuery(serverId) {
     importMessage.value = `${serverNameById(serverId)} ${queryType === LOG_QUERY_TYPE_XRAY ? '分析' : '查询'}结果已清空`
   } catch (err) {
     handleApiError(err)
+  } finally {
+    logQueryLoading.value = { ...logQueryLoading.value, [key]: false }
   }
 }
 
@@ -1155,19 +1168,25 @@ async function cancelLogQuery(serverId) {
   const key = logQueryStateKey(serverId, queryType)
   const result = selectedLogFeatureResult.value
   if (!result?.jobId || !isActiveJob(result) || logQueryCancelRequests.value[key] || result.status === 'CANCELLING') return
+  logQueryRequests.cancel(key)
+  logQueryLoading.value = { ...logQueryLoading.value, [key]: true }
   logQueryCancelRequests.value = { ...logQueryCancelRequests.value, [key]: true }
   error.value = ''
   try {
     const endpoint = queryType === LOG_QUERY_TYPE_XRAY ? 'xray-analysis-jobs' : 'log-query-jobs'
     const cancelled = await apiPostJson(`/api/import/${endpoint}/cancel`, { serverId, queryType, jobId: result.jobId })
     if (queryType === LOG_QUERY_TYPE_XRAY) xrayAnalysisResults.value = { ...xrayAnalysisResults.value, [key]: cancelled }
-    else logQueryResults.value = { ...logQueryResults.value, [key]: cancelled }
+    else {
+      logQueryResults.value = { ...logQueryResults.value, [key]: cancelled }
+      await loadLogQueryState(serverId, false, queryType)
+    }
     importMessage.value = '已请求取消任务'
     startLogQueryPollingIfNeeded()
   } catch (err) {
     handleApiError(err)
   } finally {
     logQueryCancelRequests.value = { ...logQueryCancelRequests.value, [key]: false }
+    logQueryLoading.value = { ...logQueryLoading.value, [key]: false }
   }
 }
 
@@ -1341,20 +1360,20 @@ function logQueryModeLabel(queryType = logQueryMode.value) {
 }
 
 function setLogQueryPage(page) {
-  const key = logQueryStateKey(logQueryServerId.value)
   const totalPages = selectedLogQueryTotalPages.value || 1
   const nextPage = Math.max(1, Math.min(Number(page) || 1, totalPages))
-  if (nextPage === selectedLogQueryPage.value) return
-  logQueryPages.value = { ...logQueryPages.value, [key]: nextPage }
-  loadLogQueryState(logQueryServerId.value)
+  if (nextPage !== selectedLogQueryPage.value) loadLogQueryState(logQueryServerId.value, false, logQueryMode.value, { page: nextPage })
 }
-
 function setLogQueryPageSize(pageSize) {
-  const key = logQueryStateKey(logQueryServerId.value)
-  const safePageSize = LOG_QUERY_PAGE_SIZE_OPTIONS.includes(Number(pageSize)) ? Number(pageSize) : DEFAULT_PAGE_SIZE
-  logQueryPageSizes.value = { ...logQueryPageSizes.value, [key]: safePageSize }
-  logQueryPages.value = { ...logQueryPages.value, [key]: 1 }
-  loadLogQueryState(logQueryServerId.value)
+  const size = PAGE_SIZE_OPTIONS.includes(Number(pageSize)) ? Number(pageSize) : DEFAULT_PAGE_SIZE
+  loadLogQueryState(logQueryServerId.value, false, logQueryMode.value, { page: 1, pageSize: size })
+}
+function setLogQuerySortOrder(sortOrder) {
+  loadLogQueryState(logQueryServerId.value, false, logQueryMode.value, { page: 1, sortOrder })
+}
+function setXrayDetailSortOrder(sortOrder) {
+  xrayDetailSortOrder.value = sortOrder
+  xrayDetailOrePositionPage.value = 1
 }
 
 function openLogQueryRowDetail(row) {
@@ -3399,7 +3418,7 @@ function toggleAllImportFileSelection(checked) {
             第 {{ selectedLogQueryPage }} / {{ selectedLogQueryTotalPages || 1 }} 页，本页 {{ formatNumber(selectedLogQueryRows.length) }} 条，共 {{ formatNumber(selectedLogQueryResult?.matchedRows || 0) }} 条
           </span>
           <div class="pagination-controls">
-            <AdminPagination :page="selectedLogQueryPage" :total-pages="selectedLogQueryTotalPages || 1" :page-size="selectedLogQueryPageSize" :loading="selectedLogQueryLoading" @page="setLogQueryPage" @page-size="setLogQueryPageSize" />
+            <AdminPagination :page="selectedLogQueryPage" :total-pages="selectedLogQueryTotalPages || 1" :page-size="selectedLogQueryPageSize" :sort-order="selectedLogQuerySortOrder" @order="setLogQuerySortOrder" :loading="selectedLogQueryLoading" @page="setLogQueryPage" @page-size="setLogQueryPageSize" />
           </div>
         </div>
         <div class="table-wrap log-query-table-wrap">
@@ -3472,7 +3491,7 @@ function toggleAllImportFileSelection(checked) {
             第 {{ selectedLogQueryPage }} / {{ selectedLogQueryTotalPages || 1 }} 页，本页 {{ formatNumber(selectedLogQueryRows.length) }} 条，共 {{ formatNumber(selectedLogQueryResult?.matchedRows || 0) }} 条
           </span>
           <div class="pagination-controls">
-            <AdminPagination :page="selectedLogQueryPage" :total-pages="selectedLogQueryTotalPages || 1" :page-size="selectedLogQueryPageSize" :loading="selectedLogQueryLoading" @page="setLogQueryPage" @page-size="setLogQueryPageSize" />
+            <AdminPagination :page="selectedLogQueryPage" :total-pages="selectedLogQueryTotalPages || 1" :page-size="selectedLogQueryPageSize" :sort-order="selectedLogQuerySortOrder" @order="setLogQuerySortOrder" :loading="selectedLogQueryLoading" @page="setLogQueryPage" @page-size="setLogQueryPageSize" />
             <button class="secondary-button" type="button" @click="scrollLogQueryToTop">
               <ArrowUp :size="18" />
               <span>返回顶部</span>
@@ -3729,7 +3748,7 @@ function toggleAllImportFileSelection(checked) {
                     第 {{ clampPage(xrayDetailOrePositionPage, xrayDetailOrePositionTotalPages) }} / {{ xrayDetailOrePositionTotalPages }} 页，本页 {{ formatNumber(xrayDetailPagedRareOreRows.length) }} 条，共 {{ formatNumber(xrayDetailRareOreRows.length) }} 条
                   </span>
                   <div class="pagination-controls">
-                    <AdminPagination :page="clampPage(xrayDetailOrePositionPage, xrayDetailOrePositionTotalPages)" :total-pages="xrayDetailOrePositionTotalPages" :page-size="xrayDetailOrePositionPageSize" @page="setXrayDetailOrePositionPage" @page-size="setXrayDetailOrePositionPageSize" />
+                    <AdminPagination :page="clampPage(xrayDetailOrePositionPage, xrayDetailOrePositionTotalPages)" :total-pages="xrayDetailOrePositionTotalPages" :page-size="xrayDetailOrePositionPageSize" :sort-order="xrayDetailSortOrder" @order="setXrayDetailSortOrder" @page="setXrayDetailOrePositionPage" @page-size="setXrayDetailOrePositionPageSize" />
                   </div>
                 </div>
                 <table class="xray-ore-position-table">
@@ -3757,7 +3776,7 @@ function toggleAllImportFileSelection(checked) {
                     第 {{ clampPage(xrayDetailOrePositionPage, xrayDetailOrePositionTotalPages) }} / {{ xrayDetailOrePositionTotalPages }} 页，本页 {{ formatNumber(xrayDetailPagedRareOreRows.length) }} 条，共 {{ formatNumber(xrayDetailRareOreRows.length) }} 条
                   </span>
                   <div class="pagination-controls">
-                    <AdminPagination :page="clampPage(xrayDetailOrePositionPage, xrayDetailOrePositionTotalPages)" :total-pages="xrayDetailOrePositionTotalPages" :page-size="xrayDetailOrePositionPageSize" @page="setXrayDetailOrePositionPage" @page-size="setXrayDetailOrePositionPageSize" />
+                    <AdminPagination :page="clampPage(xrayDetailOrePositionPage, xrayDetailOrePositionTotalPages)" :total-pages="xrayDetailOrePositionTotalPages" :page-size="xrayDetailOrePositionPageSize" :sort-order="xrayDetailSortOrder" @order="setXrayDetailSortOrder" @page="setXrayDetailOrePositionPage" @page-size="setXrayDetailOrePositionPageSize" />
                     <button class="secondary-button" type="button" @click="scrollToXrayDetailOrePositions">
                       <ArrowUp :size="18" />
                       <span>返回稀有矿位置</span>

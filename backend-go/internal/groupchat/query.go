@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"player-stats-backend-go/internal/apitype"
 	"player-stats-backend-go/internal/auth"
 )
 
@@ -26,21 +27,23 @@ const (
 )
 
 type QueryRequest struct {
-	FromDate string `json:"fromDate"`
-	ToDate   string `json:"toDate"`
-	Player   string `json:"player"`
-	Keyword  string `json:"keyword"`
+	FromDate  string `json:"fromDate"`
+	ToDate    string `json:"toDate"`
+	Player    string `json:"player"`
+	Keyword   string `json:"keyword"`
+	SortOrder string `json:"sortOrder"`
 }
 type QueryPage struct {
-	SnapshotID   string    `json:"snapshotId"`
-	CreatedAt    time.Time `json:"createdAt"`
-	ExpiresAt    time.Time `json:"expiresAt"`
-	Total        int       `json:"total"`
-	Page         int       `json:"page"`
-	PageSize     int       `json:"pageSize"`
-	Rows         []string  `json:"rows"`
-	Players      []string  `json:"players"`
-	MissingDates []string  `json:"missingDates"`
+	SnapshotID   string            `json:"snapshotId"`
+	CreatedAt    time.Time         `json:"createdAt"`
+	ExpiresAt    time.Time         `json:"expiresAt"`
+	Total        int               `json:"total"`
+	Page         int               `json:"page"`
+	PageSize     int               `json:"pageSize"`
+	SortOrder    apitype.SortOrder `json:"sortOrder"`
+	Rows         []string          `json:"rows"`
+	Players      []string          `json:"players"`
+	MissingDates []string          `json:"missingDates"`
 }
 type chatRow struct {
 	raw   string
@@ -96,6 +99,10 @@ func (s *QueryService) validate(r QueryRequest) (time.Time, time.Time, error) {
 }
 
 func (s *QueryService) Search(ctx context.Context, request QueryRequest) (QueryPage, error) {
+	order, err := apitype.ParseSortOrder(request.SortOrder)
+	if err != nil {
+		return QueryPage{}, auth.NewHTTPError(400, err.Error())
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	stopShutdown := context.AfterFunc(s.lifetime, cancel)
 	defer stopShutdown()
@@ -161,7 +168,7 @@ func (s *QueryService) Search(ctx context.Context, request QueryRequest) (QueryP
 		totalBytes -= oldest.bytes
 	}
 	s.snapshots[snapshot.id] = snapshot
-	return snapshot.page(1, 200), nil
+	return snapshot.page(1, 200, order), nil
 }
 
 func scanChatFiles(ctx context.Context, files queryFiles, request QueryRequest, zone *time.Location) (*querySnapshot, error) {
@@ -250,16 +257,23 @@ func scanChatFiles(ctx context.Context, files queryFiles, request QueryRequest, 
 	return result, nil
 }
 
-func (s *querySnapshot) page(page, size int) QueryPage {
+func (s *querySnapshot) page(page, size int, order apitype.SortOrder) QueryPage {
 	start := min((page-1)*size, len(s.rows))
 	end := min(start+size, len(s.rows))
 	rows := make([]string, 0, end-start)
-	for _, row := range s.rows[start:end] {
+	for _, row := range apitype.CopyOrderedRange(s.rows, start, end, order) {
 		rows = append(rows, row.raw)
 	}
-	return QueryPage{s.id, s.created, s.expires, len(s.rows), page, size, rows, s.players, s.missing}
+	return QueryPage{SnapshotID: s.id, CreatedAt: s.created, ExpiresAt: s.expires, Total: len(s.rows), Page: page, PageSize: size, SortOrder: order, Rows: rows, Players: s.players, MissingDates: s.missing}
 }
 func (s *QueryService) Page(id string, page, size int) (QueryPage, error) {
+	return s.SortedPage(id, page, size, "asc")
+}
+func (s *QueryService) SortedPage(id string, page, size int, sortOrder string) (QueryPage, error) {
+	order, err := apitype.ParseSortOrder(sortOrder)
+	if err != nil {
+		return QueryPage{}, auth.NewHTTPError(400, err.Error())
+	}
 	if page < 1 || page > 100000 || size < 1 || size > 500 {
 		return QueryPage{}, auth.NewHTTPError(400, "分页参数无效")
 	}
@@ -273,7 +287,7 @@ func (s *QueryService) Page(id string, page, size int) (QueryPage, error) {
 	if (page-1)*size >= len(entry.rows) && page != 1 {
 		return QueryPage{}, auth.NewHTTPError(400, "页码超出范围")
 	}
-	return entry.page(page, size), nil
+	return entry.page(page, size, order), nil
 }
 func (s *QueryService) pruneLocked() {
 	for id, entry := range s.snapshots {

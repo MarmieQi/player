@@ -19,6 +19,7 @@ const loading = ref(false)
 const initializing = ref(true)
 const error = ref('')
 const pageSize = ref(DEFAULT_PAGE_SIZE)
+const sortOrder = ref('asc')
 const pages = computed(() => Math.max(1, Math.ceil((result.value?.total || 0) / (result.value?.pageSize || DEFAULT_PAGE_SIZE))))
 let abort
 let version = 0
@@ -34,7 +35,7 @@ function stop() { ++version; abort?.abort(); loading.value = false }
 function clear() {
 	updateToday()
   stop(); result.value = null; searched.value = null; error.value = ''
-  fromDate.value = today.value; toDate.value = today.value; player.value = ''; keyword.value = ''; pageSize.value = DEFAULT_PAGE_SIZE
+  fromDate.value = today.value; toDate.value = today.value; player.value = ''; keyword.value = ''; pageSize.value = DEFAULT_PAGE_SIZE; sortOrder.value = 'asc'
 }
 async function run(operation, criteria) {
   stop(); const current = version; abort = new AbortController(); loading.value = true; error.value = ''
@@ -43,7 +44,9 @@ async function run(operation, criteria) {
     const value = await operation(abort.signal)
     if (disposed || current !== version) return
     result.value = value
-    if (criteria) { searched.value = criteria; pageSize.value = value.pageSize }
+    pageSize.value = value.pageSize
+    sortOrder.value = value.sortOrder || 'asc'
+    if (criteria) searched.value = criteria
   } catch (err) {
     if (!disposed && current === version && err.name !== 'AbortError') {
       error.value = err.message
@@ -57,16 +60,15 @@ async function search() {
     error.value = '请选择有效日期，结束日期不能晚于今天'; return
   }
   const criteria = { fromDate: fromDate.value, toDate: toDate.value, player: player.value.trim(), keyword: keyword.value.trim() }
-  await run(signal => apiPostJson(endpoint, criteria, { signal }), criteria)
+  await run(signal => apiPostJson(endpoint, { ...criteria, sortOrder: sortOrder.value }, { signal }), criteria)
 }
-async function page(number) {
+async function page(number, overrides = {}) {
   if (!result.value) return
   const id = result.value.snapshotId
-  await run(signal => apiGet(`${endpoint}/${encodeURIComponent(id)}`, { page: number, pageSize: pageSize.value }, { signal }))
+  await run(signal => apiGet(`${endpoint}/${encodeURIComponent(id)}`, { page: number, pageSize: pageSize.value, sortOrder: sortOrder.value, ...overrides }, { signal }))
 }
 function changePageSize(value) {
-  pageSize.value = value
-  return page(1)
+  return page(1, { pageSize: value })
 }
 onMounted(async () => {
   try {
@@ -105,7 +107,7 @@ onUnmounted(() => { disposed = true; stop(); lifecycle.abort(); clearInterval(da
     <article class="panel chat-results" :aria-busy="loading">
       <div class="chat-result-heading">
         <div><h2>聊天原文</h2><p v-if="result" class="chat-hint">{{ searched?.fromDate }} 至 {{ searched?.toDate }} · 共 {{ result.total }} 条</p></div>
-        <AdminPagination v-if="result" :page="result.page" :total-pages="pages" :page-size="pageSize" :loading="loading" @page="page" @page-size="changePageSize" />
+        <AdminPagination v-if="result" :page="result.page" :total-pages="pages" :page-size="pageSize" :sort-order="sortOrder" :loading="loading" @page="page" @page-size="changePageSize" @order="page(1, { sortOrder: $event })" />
       </div>
       <div v-if="result?.rows?.length" class="chat-raw-lines" aria-label="聊天记录"><div v-for="(line, index) in result.rows" :key="`${result.snapshotId}-${result.page}-${index}`" class="chat-raw-line">{{ line }}</div></div>
       <p v-else class="chat-empty">{{ loading ? '正在获取文件并搜索完整原文…' : result ? '没有匹配的聊天记录' : '选择日期、玩家或关键词后查询' }}</p>

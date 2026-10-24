@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"player-stats-backend-go/internal/apitype"
 	"strings"
 	"testing"
 	"time"
@@ -84,6 +85,57 @@ func TestChatFiltersBeforePagingAndPagesStayStable(t *testing.T) {
 	service.now = func() time.Time { return first.ExpiresAt }
 	if _, err := service.Page(first.SnapshotID, 1, 100); err == nil {
 		t.Fatal("expired page accepted")
+	}
+}
+
+func TestChatSortDirectionAcrossPagesKeepsSnapshotAndExpiry(t *testing.T) {
+	var text strings.Builder
+	for i := 0; i < 601; i++ {
+		fmt.Fprintf(&text, "[2026-10-12 01:00:00] [主服]<Steve> record-%03d\n", i)
+	}
+	service, _, request := queryFixture(t, text.String())
+	request.SortOrder = "desc"
+	first, err := service.Search(context.Background(), request)
+	if err != nil || !strings.HasSuffix(first.Rows[0], "record-600") || first.SortOrder != "desc" {
+		t.Fatalf("initial descending: %+v %v", first, err)
+	}
+	service.files = func(context.Context, time.Time, time.Time) (queryFiles, error) {
+		t.Fatal("sort rescanned files")
+		return queryFiles{}, nil
+	}
+	for _, order := range []string{"asc", "desc", "asc"} {
+		for _, size := range []int{50, 200, 500} {
+			seen := 0
+			for page := 1; seen < 601; page++ {
+				got, err := service.SortedPage(first.SnapshotID, page, size, order)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got.SortOrder != apitype.SortOrder(order) || !got.ExpiresAt.Equal(first.ExpiresAt) {
+					t.Fatalf("snapshot metadata changed: %+v", got)
+				}
+				for _, row := range got.Rows {
+					index := seen
+					if order == "desc" {
+						index = 600 - seen
+					}
+					if !strings.HasSuffix(row, fmt.Sprintf("record-%03d", index)) {
+						t.Fatalf("%s size %d row %d: %s", order, size, seen, row)
+					}
+					seen++
+				}
+			}
+			if seen != 601 {
+				t.Fatalf("row count %d", seen)
+			}
+		}
+	}
+	if _, err := service.SortedPage(first.SnapshotID, 1, 200, "bad"); err == nil {
+		t.Fatal("invalid order accepted")
+	}
+	service.now = func() time.Time { return first.ExpiresAt }
+	if _, err := service.SortedPage(first.SnapshotID, 1, 200, "desc"); err == nil {
+		t.Fatal("expired result accepted")
 	}
 }
 
