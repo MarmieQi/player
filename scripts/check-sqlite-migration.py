@@ -33,6 +33,7 @@ done
 exit 1
 '''
   (bins/'docker').write_text(docker,newline='\n');(bins/'curl').write_text(curl,newline='\n')
+  (bins/'docker').chmod(0o755);(bins/'curl').chmod(0o755)
   env=os.environ.copy();env['PATH']=str(bins)+os.pathsep+env['PATH'];env['FIXTURE_LOG']=str(log).replace('\\','/');env['FIXTURE_MODE']=mode
   env.pop('MIGRATION_NETWORK',None)
   env['FIXTURE_BIN']=('/'+str(bins)[0].lower()+str(bins)[2:].replace('\\','/')) if os.name=='nt' else str(bins)
