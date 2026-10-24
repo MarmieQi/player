@@ -92,7 +92,9 @@ func newPublicFixture(t *testing.T) publicFixture {
 	if e = db.QueryRowContext(ctx, `select astrbot_api_key from sharing_settings`).Scan(&key); e != nil {
 		t.Fatal(e)
 	}
-	app := httpapi.NewServer(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), accounts, policy, shares, ingest, nil, logs, nil, statsSvc, nil, nil)
+	jobs := importer.NewJobService(ingest)
+	t.Cleanup(jobs.Close)
+	app := httpapi.NewServer(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), accounts, policy, shares, ingest, jobs, logs, nil, statsSvc, nil, nil)
 	return publicFixture{db: db, handler: app.Handler(), shares: shares, key: key, admin: login.Token}
 }
 func (f publicFixture) request(t *testing.T, method, path string, body any, identity string, want int, out any) {

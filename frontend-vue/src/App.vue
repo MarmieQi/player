@@ -109,6 +109,13 @@ const importFiles = ref([])
 const importJob = ref(null)
 const importPageLoading = ref(false)
 const resetRemotePath = ref('')
+const deleteRecordJob = ref(null)
+const deleteRecordPollError = ref('')
+const deletingImportRecords = computed(() => Boolean(resetRemotePath.value) || isActiveJob(deleteRecordJob.value))
+const DELETE_JOB_STORAGE_KEY = 'player-stats-last-delete-records-job'
+let deleteRecordTimer
+let deleteRecordAbort
+let deleteRecordVersion = 0
 const selectedResetKeys = ref(new Set())
 const deletingLocalCsv = ref(false)
 const loginForm = ref({
@@ -411,6 +418,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  stopDeleteRecordPolling()
   window.removeEventListener('hashchange', handleAdminHashChange)
   stopShareTicker()
   stopServerTimeTicker()
@@ -626,6 +634,9 @@ async function login() {
 
 async function logout() {
   if (currentView.value === 'settingsPage' && settingsPage.value && !settingsPage.value.canLeave()) return
+  stopDeleteRecordPolling()
+  deleteRecordJob.value = null
+  resetRemotePath.value = ''
   stopImportJobPolling()
   stopSyncJobPolling()
   stopLogQueryPolling()
@@ -693,6 +704,7 @@ async function openImportPage(serverId = filters.value.serverId) {
   error.value = ''
   await loadImportFiles()
   await restoreImportJob()
+  await restoreDeleteRecordJob()
 }
 
 async function loadImportFiles({ resetJob = false } = {}) {
@@ -715,6 +727,7 @@ async function loadImportFiles({ resetJob = false } = {}) {
 }
 
 async function startImportJob() {
+  if (deletingImportRecords.value) return
   if (filters.value.serverId === 'all') {
     error.value = '请先选择主服或 2服，再解析 CSV'
     return
@@ -789,6 +802,7 @@ async function restoreImportJob() {
 }
 
 async function deleteImportRecord(file) {
+  if (deletingImportRecords.value) return
   if (!file?.imported && !['IMPORTED', 'CHANGED', 'NEEDS_IMPORT'].includes(file?.status)) {
     return
   }
@@ -814,36 +828,102 @@ async function deleteImportRecord(file) {
   }
 }
 
-async function deleteSelectedImportRecords() {
-  const files = importPageFiles.value.filter((file) => selectedResetKeys.value.has(importFileKey(file)))
-  if (!files.length) {
-    return
-  }
+function stopDeleteRecordPolling() {
+  ++deleteRecordVersion
+  clearTimeout(deleteRecordTimer)
+  deleteRecordTimer = null
+  deleteRecordAbort?.abort()
+  deleteRecordAbort = null
+}
 
-  const ok = window.confirm(`只删除数据库中的解析记录，不删除本地 CSV。\n本次将删除 ${files.length} 个文件的解析记录，删除后可以重新解析。确定继续吗？`)
-  if (!ok) {
-    return
+function pollDeleteRecordJob(jobId) {
+  stopDeleteRecordPolling()
+  const version = deleteRecordVersion
+  async function tick() {
+    deleteRecordAbort = new AbortController()
+    try {
+      const job = await apiGet(`/api/import/delete-jobs/${encodeURIComponent(jobId)}`, {}, { signal: deleteRecordAbort.signal })
+      if (version !== deleteRecordVersion) return
+      deleteRecordJob.value = job
+      deleteRecordPollError.value = ''
+      if (isActiveJob(job)) {
+        resetRemotePath.value = '__batch__'
+        deleteRecordTimer = setTimeout(tick, 1000)
+        return
+      }
+      resetRemotePath.value = ''
+      localStorage.removeItem(DELETE_JOB_STORAGE_KEY)
+      importMessage.value = job.message || `已删除 ${job.deletedFiles} 个数据库解析记录${job.failedFiles ? `，失败 ${job.failedFiles} 个` : ''}`
+      selectedResetKeys.value = new Set()
+      await loadImportFiles({ resetJob: true })
+      if (version !== deleteRecordVersion) return
+      await loadAll()
+      if (version === deleteRecordVersion && job.status === 'FAILED') error.value = importMessage.value
+    } catch (err) {
+      if (version !== deleteRecordVersion || err.name === 'AbortError') return
+      if (err.status === 404 || err.status === 401) {
+        localStorage.removeItem(DELETE_JOB_STORAGE_KEY)
+        deleteRecordJob.value = null
+        resetRemotePath.value = ''
+        if (err.status === 404) await loadImportFiles({ resetJob: true })
+        deleteRecordPollError.value = err.message
+        return
+      }
+      deleteRecordPollError.value = '暂时无法获取删除进度，正在重试'
+      deleteRecordTimer = setTimeout(tick, 3000)
+    }
   }
+  tick()
+}
 
-  resetRemotePath.value = '__batch__'
-  error.value = ''
+async function restoreDeleteRecordJob() {
+  const version = deleteRecordVersion
+  const saved = localStorage.getItem(DELETE_JOB_STORAGE_KEY)
   try {
-    const results = await apiPostJson('/api/import/files/delete-records', {
-      files: files.map((file) => ({
-        serverId: file.serverId,
-        remotePath: file.remotePath
-      }))
-    })
-    const deletedCount = results.filter((result) => result.deleted).length
-    const failedCount = results.length - deletedCount
-    importMessage.value = `已删除 ${deletedCount} 个数据库解析记录${failedCount ? `，失败 ${failedCount} 个` : ''}`
-    selectedResetKeys.value = new Set()
-    await loadImportFiles({ resetJob: true })
-    await loadAll()
+    const job = await apiGet(`/api/import/delete-jobs/${encodeURIComponent(saved || 'latest')}`)
+    if (version !== deleteRecordVersion || !authenticated.value) return
+    if (isActiveJob(job) || saved) {
+      deleteRecordJob.value = job
+      resetRemotePath.value = '__batch__'
+      localStorage.setItem(DELETE_JOB_STORAGE_KEY, job.jobId)
+      pollDeleteRecordJob(job.jobId)
+    }
   } catch (err) {
-    handleApiError(err)
-  } finally {
+    if (version !== deleteRecordVersion || !authenticated.value) return
+    if (err.status === 404) {
+      localStorage.removeItem(DELETE_JOB_STORAGE_KEY)
+      if (saved) deleteRecordPollError.value = '删除任务已结束或服务已重启，请以文件列表为准'
+    } else handleApiError(err)
+  }
+}
+
+async function deleteSelectedImportRecords() {
+  if (deletingImportRecords.value) return
+  const files = importPageFiles.value.filter(file => selectedResetKeys.value.has(importFileKey(file)))
+  if (!files.length) return
+  if (!window.confirm(`只删除数据库中的解析记录，不删除本地 CSV。\n本次将删除 ${files.length} 个文件的解析记录，删除后可以重新解析。确定继续吗？`)) return
+  stopDeleteRecordPolling()
+  const version = deleteRecordVersion
+  resetRemotePath.value = '__batch__'
+  deleteRecordJob.value = null
+  deleteRecordPollError.value = ''
+  error.value = ''
+  deleteRecordAbort = new AbortController()
+  try {
+    const job = await apiPostJson('/api/import/delete-jobs', {
+      files: files.map(file => ({ serverId: file.serverId, remotePath: file.remotePath }))
+    }, { signal: deleteRecordAbort.signal })
+    if (version !== deleteRecordVersion) return
+    deleteRecordJob.value = job
+    localStorage.setItem(DELETE_JOB_STORAGE_KEY, job.jobId)
+    pollDeleteRecordJob(job.jobId)
+  } catch (err) {
+    if (version !== deleteRecordVersion || err.name === 'AbortError') return
     resetRemotePath.value = ''
+    handleApiError(err)
+    // An accepted job may outlive a lost acknowledgement. Discover it before retrying.
+    await restoreDeleteRecordJob()
+    if (version === deleteRecordVersion) await loadImportFiles()
   }
 }
 
@@ -3079,7 +3159,7 @@ function toggleAllImportFileSelection(checked) {
             <input type="checkbox" v-model="importSkipToday" :disabled="importJobRunning" />
             <span>跳过当天文件</span>
           </label>
-          <button class="primary-button" type="button" :disabled="importing || importJobRunning || !importPageFiles.length" @click="startImportJob">
+          <button class="primary-button" type="button" :disabled="importing || importJobRunning || deletingImportRecords || !importPageFiles.length" @click="startImportJob">
             <Play :size="18" />
             <span>{{ importJobRunning ? '解析中' : `开始解析 ${selectedServerName}` }}</span>
           </button>
@@ -3117,12 +3197,13 @@ function toggleAllImportFileSelection(checked) {
           <h2>文件解析情况</h2>
           <span>{{ importJob?.status || 'READY' }}</span>
         </div>
+        <p v-if="deleteRecordPollError" class="notice error">{{ deleteRecordPollError }}</p>
         <div class="bulk-actions">
           <label class="bulk-check">
             <input
               type="checkbox"
               :checked="allEligibleSelected"
-              :disabled="importJobRunning || !eligibleImportFiles.length"
+              :disabled="importJobRunning || deletingImportRecords || !eligibleImportFiles.length"
               @change="toggleAllImportFileSelection($event.target.checked)"
             />
             <span>选择可删除记录</span>
@@ -3130,11 +3211,11 @@ function toggleAllImportFileSelection(checked) {
           <button
             class="table-action danger"
             type="button"
-            :disabled="importJobRunning || resetRemotePath === '__batch__' || !selectedResetCount"
+            :disabled="importJobRunning || deletingImportRecords || !selectedResetCount"
             @click="deleteSelectedImportRecords"
           >
             <Trash2 :size="15" />
-            <span>{{ resetRemotePath === '__batch__' ? '批量删除中' : `批量删记录 ${selectedResetCount}` }}</span>
+            <span>{{ resetRemotePath === '__batch__' ? `批量删除中 ${deleteRecordJob?.processedFiles || 0} / ${deleteRecordJob?.totalFiles || selectedResetCount}` : `批量删记录 ${selectedResetCount}` }}</span>
           </button>
         </div>
         <div class="table-wrap">
@@ -3158,7 +3239,7 @@ function toggleAllImportFileSelection(checked) {
                   <input
                     type="checkbox"
                     :checked="selectedResetKeys.has(importFileKey(file))"
-                    :disabled="importJobRunning || !canDeleteImportRecord(file)"
+                    :disabled="importJobRunning || deletingImportRecords || !canDeleteImportRecord(file)"
                     @change="toggleImportFileSelection(file, $event.target.checked)"
                   />
                 </td>
@@ -3177,7 +3258,7 @@ function toggleAllImportFileSelection(checked) {
                   <button
                     class="table-action danger"
                     type="button"
-                    :disabled="importJobRunning || resetRemotePath === file.remotePath || !canDeleteImportRecord(file)"
+                    :disabled="importJobRunning || deletingImportRecords || !canDeleteImportRecord(file)"
                     @click="deleteImportRecord(file)"
                   >
                     <Trash2 :size="15" />

@@ -90,6 +90,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/import/jobs/{jobId}", s.importJob)
 	s.mux.HandleFunc("DELETE /api/import/files", s.deleteImportFile)
 	s.mux.HandleFunc("POST /api/import/files/delete-records", s.deleteImportRecords)
+	s.mux.HandleFunc("POST /api/import/delete-jobs", s.startDeleteImportRecords)
+	s.mux.HandleFunc("GET /api/import/delete-jobs/{jobId}", s.deleteImportRecordsJob)
 	s.mux.HandleFunc("POST /api/import/local-files/delete", s.deleteLocalFiles)
 	s.mux.HandleFunc("POST /api/import/sync-jobs", s.startSyncJob)
 	s.mux.HandleFunc("GET /api/import/sync-jobs/{jobId}", s.syncJob)

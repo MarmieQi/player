@@ -143,33 +143,45 @@ func (s *Service) DeleteImportRecord(ctx context.Context, serverID, remotePath s
 }
 
 func (s *Service) DeleteImportRecords(ctx context.Context, request DeleteImportRecordsRequest) []DeleteImportRecordResult {
+	return s.deleteImportRecords(ctx, request, nil)
+}
+
+func (s *Service) deleteImportRecords(ctx context.Context, request DeleteImportRecordsRequest, progress func(int)) []DeleteImportRecordResult {
 	if len(request.Files) == 0 {
 		return []DeleteImportRecordResult{{Deleted: false, Message: "files are required"}}
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return []DeleteImportRecordResult{{Deleted: false, Message: err.Error()}}
+		return failedDeleteRequest(request, err)
 	}
 	defer rollbackQuietly(tx)
 
 	results := make([]DeleteImportRecordResult, 0, len(request.Files))
-	for _, file := range request.Files {
+	for index, file := range request.Files {
+		if progress != nil {
+			progress(index)
+		}
 		if _, err := tx.ExecContext(ctx, `savepoint delete_file`); err != nil {
-			return []DeleteImportRecordResult{{Message: err.Error()}}
+			return failedDeleteRequest(request, err)
 		}
 		deleted, err := s.deleteImportRecordTx(ctx, tx, file.ServerID, file.RemotePath)
 		if err != nil {
 			if _, e := tx.ExecContext(ctx, `rollback to delete_file`); e != nil {
-				return []DeleteImportRecordResult{{Message: e.Error()}}
+				return failedDeleteRequest(request, e)
 			}
-			_, _ = tx.ExecContext(ctx, `release delete_file`)
+			if _, e := tx.ExecContext(ctx, `release delete_file`); e != nil {
+				return failedDeleteRequest(request, e)
+			}
 			results = append(results, DeleteImportRecordResult{ServerID: file.ServerID, RemotePath: file.RemotePath, Deleted: false, Message: err.Error()})
 			continue
 		}
 		if _, e := tx.ExecContext(ctx, `release delete_file`); e != nil {
-			return []DeleteImportRecordResult{{Message: e.Error()}}
+			return failedDeleteRequest(request, e)
 		}
 		results = append(results, deleted.result)
+	}
+	if progress != nil {
+		progress(len(request.Files))
 	}
 	if err := tx.Commit(); err != nil {
 		for i := range results {
@@ -177,6 +189,14 @@ func (s *Service) DeleteImportRecords(ctx context.Context, request DeleteImportR
 			results[i].Message = "事务回滚：" + err.Error()
 		}
 		return results
+	}
+	return results
+}
+
+func failedDeleteRequest(request DeleteImportRecordsRequest, err error) []DeleteImportRecordResult {
+	results := make([]DeleteImportRecordResult, 0, len(request.Files))
+	for _, file := range request.Files {
+		results = append(results, DeleteImportRecordResult{ServerID: file.ServerID, RemotePath: file.RemotePath, Message: "事务回滚：" + err.Error()})
 	}
 	return results
 }
@@ -198,14 +218,7 @@ func (s *Service) deleteImportRecordTx(ctx context.Context, tx *storage.Tx, serv
 	if !found {
 		return deletedImportRecord{}, auth.NewHTTPError(404, "Import record not found")
 	}
-	affectedPlayers, err := loadFileSeenPlayers(ctx, tx, record.id)
-	if err != nil {
-		return deletedImportRecord{}, err
-	}
-	if _, err := tx.ExecContext(ctx, `delete from import_files where id=?`, record.id); err != nil {
-		return deletedImportRecord{}, err
-	}
-	if err := s.syncProfiles(ctx, tx, record.serverID, record.serverName, affectedPlayers); err != nil {
+	if err := deleteFileAndSyncAffectedSummaries(ctx, tx, record.id, record.serverID); err != nil {
 		return deletedImportRecord{}, err
 	}
 	return deletedImportRecord{

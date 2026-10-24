@@ -18,6 +18,7 @@ type JobService struct {
 	syncRunning bool
 	jobs        map[string]*jobState
 	syncJobs    map[string]*jobState
+	deleteJobs  map[string]*deleteJobState
 	lifetime    context.Context
 	stop        context.CancelFunc
 	closed      bool
@@ -41,7 +42,7 @@ func (s *JobService) StartImport(ctx context.Context, serverID string, skipToday
 	}
 	if s.running {
 		s.mu.Unlock()
-		return ImportJobView{}, auth.NewHTTPError(409, "已有解析任务正在运行，请等待完成后再开始新的任务")
+		return ImportJobView{}, auth.NewHTTPError(409, "已有解析或删除任务正在运行，请等待完成后再开始新的任务")
 	}
 	s.running = true
 	s.mu.Unlock()

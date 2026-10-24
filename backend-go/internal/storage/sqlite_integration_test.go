@@ -137,7 +137,7 @@ func TestSQLiteFailedReplacementAndBatchSavepoints(t *testing.T) {
 	if _, e = db.ExecContext(ctx, `drop trigger fixture_fail_daily`); e != nil {
 		t.Fatal(e)
 	}
-	if _, e = db.ExecContext(ctx, `create trigger fixture_fail_summary before insert on player_daily_stats when new.broken_count=2 begin select raise(abort,'fixture summary failure'); end`); e != nil {
+	if _, e = db.ExecContext(ctx, `create trigger fixture_fail_summary before delete on player_daily_stats when old.broken_count=1 begin select raise(abort,'fixture summary failure'); end`); e != nil {
 		t.Fatal(e)
 	}
 	result := svc.DeleteImportRecords(ctx, importer.DeleteImportRecordsRequest{Files: []importer.ImportRecordKey{{ServerID: "main", RemotePath: first}, {ServerID: "main", RemotePath: second}}})

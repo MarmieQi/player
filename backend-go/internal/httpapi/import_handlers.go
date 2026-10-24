@@ -48,6 +48,21 @@ func (s *Server) deleteImportRecords(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.importService.DeleteImportRecords(r.Context(), request))
 }
 
+func (s *Server) startDeleteImportRecords(w http.ResponseWriter, r *http.Request) {
+	var request importer.DeleteImportRecordsRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "请求体无效或过大")
+		return
+	}
+	response, err := s.importJobs.StartDeleteRecords(r.Context(), request)
+	s.writeHTTPErrorResult(w, http.StatusAccepted, response, err)
+}
+
+func (s *Server) deleteImportRecordsJob(w http.ResponseWriter, r *http.Request) {
+	response, err := s.importJobs.GetDeleteJob(r.PathValue("jobId"))
+	s.writeHTTPErrorResult(w, http.StatusOK, response, err)
+}
+
 func (s *Server) deleteLocalFiles(w http.ResponseWriter, r *http.Request) {
 	var request importer.DeleteImportRecordsRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
