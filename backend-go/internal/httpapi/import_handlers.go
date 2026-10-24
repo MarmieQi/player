@@ -101,7 +101,7 @@ func (s *Server) latestLogQuery(w http.ResponseWriter, r *http.Request) {
 		r.URL.Query().Get("serverId"),
 		r.URL.Query().Get("queryType"),
 		queryInt(r, "page", 1),
-		queryInt(r, "pageSize", 100),
+		queryInt(r, "pageSize", 200),
 	)
 	s.writeHTTPErrorResult(w, http.StatusOK, response, err)
 }

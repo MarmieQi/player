@@ -1,8 +1,10 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { ChevronLeft, ChevronRight, Search, X } from 'lucide-vue-next'
+import { Search, X } from 'lucide-vue-next'
 import { apiGet, apiPostJson } from '../api.js'
 import PlayerNameAutocomplete from './PlayerNameAutocomplete.vue'
+import AdminPagination from './AdminPagination.vue'
+import { DEFAULT_PAGE_SIZE } from './pagination.js'
 import { serverDateAt } from './server-date-clock.js'
 
 const endpoint = '/api/admin/group-chat/query'
@@ -16,8 +18,8 @@ const searched = ref(null)
 const loading = ref(false)
 const initializing = ref(true)
 const error = ref('')
-const pageSize = ref(100)
-const pages = computed(() => Math.max(1, Math.ceil((result.value?.total || 0) / (result.value?.pageSize || 100))))
+const pageSize = ref(DEFAULT_PAGE_SIZE)
+const pages = computed(() => Math.max(1, Math.ceil((result.value?.total || 0) / (result.value?.pageSize || DEFAULT_PAGE_SIZE))))
 let abort
 let version = 0
 let disposed = false
@@ -32,7 +34,7 @@ function stop() { ++version; abort?.abort(); loading.value = false }
 function clear() {
 	updateToday()
   stop(); result.value = null; searched.value = null; error.value = ''
-  fromDate.value = today.value; toDate.value = today.value; player.value = ''; keyword.value = ''; pageSize.value = 100
+  fromDate.value = today.value; toDate.value = today.value; player.value = ''; keyword.value = ''; pageSize.value = DEFAULT_PAGE_SIZE
 }
 async function run(operation, criteria) {
   stop(); const current = version; abort = new AbortController(); loading.value = true; error.value = ''
@@ -61,6 +63,10 @@ async function page(number) {
   if (!result.value) return
   const id = result.value.snapshotId
   await run(signal => apiGet(`${endpoint}/${encodeURIComponent(id)}`, { page: number, pageSize: pageSize.value }, { signal }))
+}
+function changePageSize(value) {
+  pageSize.value = value
+  return page(1)
 }
 onMounted(async () => {
   try {
@@ -99,12 +105,7 @@ onUnmounted(() => { disposed = true; stop(); lifecycle.abort(); clearInterval(da
     <article class="panel chat-results" :aria-busy="loading">
       <div class="chat-result-heading">
         <div><h2>聊天原文</h2><p v-if="result" class="chat-hint">{{ searched?.fromDate }} 至 {{ searched?.toDate }} · 共 {{ result.total }} 条</p></div>
-        <div v-if="result" class="chat-pager">
-          <label>每页 <select v-model.number="pageSize" :disabled="loading" @change="page(1)"><option :value="50">50</option><option :value="100">100</option><option :value="200">200</option></select></label>
-          <span>{{ result.page }} / {{ pages }}</span>
-          <button type="button" class="secondary-button" aria-label="上一页" :disabled="loading || result.page <= 1" @click="page(result.page - 1)"><ChevronLeft :size="17" /></button>
-          <button type="button" class="secondary-button" aria-label="下一页" :disabled="loading || result.page >= pages" @click="page(result.page + 1)"><ChevronRight :size="17" /></button>
-        </div>
+        <AdminPagination v-if="result" :page="result.page" :total-pages="pages" :page-size="pageSize" :loading="loading" @page="page" @page-size="changePageSize" />
       </div>
       <div v-if="result?.rows?.length" class="chat-raw-lines" aria-label="聊天记录"><div v-for="(line, index) in result.rows" :key="`${result.snapshotId}-${result.page}-${index}`" class="chat-raw-line">{{ line }}</div></div>
       <p v-else class="chat-empty">{{ loading ? '正在获取文件并搜索完整原文…' : result ? '没有匹配的聊天记录' : '选择日期、玩家或关键词后查询' }}</p>
@@ -124,10 +125,6 @@ onUnmounted(() => { disposed = true; stop(); lifecycle.abort(); clearInterval(da
 .chat-hint { color: #7a889b; font-size: 13px; font-weight: 400; margin: 6px 0 0; }
 .chat-result-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding-bottom: 18px; }
 .chat-result-heading h2 { margin: 0; font-size: 18px; }
-.chat-pager { display: flex; align-items: center; gap: 10px; color: #526479; font-size: 13px; }
-.chat-pager label { display: flex; align-items: center; gap: 8px; }
-.chat-pager select { width: 76px; min-height: 36px; padding: 6px 10px; }
-.chat-pager button { padding: 8px; min-height: 36px; }
 .chat-raw-lines { border-top: 1px solid #e6ebf2; }
 .chat-raw-line { white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, 'Cascadia Code', Consolas, monospace; font-size: 14px; line-height: 1.85; color: #34445b; padding: 9px 12px; }
 .chat-empty { text-align: center; color: #7a889b; padding: 44px 12px; }

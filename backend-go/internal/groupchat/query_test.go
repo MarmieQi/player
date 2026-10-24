@@ -63,7 +63,7 @@ func TestChatFiltersBeforePagingAndPagesStayStable(t *testing.T) {
 	}
 	service, path, request := queryFixture(t, text.String())
 	first, err := service.Search(context.Background(), request)
-	if err != nil || first.Total != 350 || len(first.Rows) != 100 || !strings.Contains(first.Rows[0], "record-000") {
+	if err != nil || first.Total != 350 || first.PageSize != 200 || len(first.Rows) != 200 || !strings.Contains(first.Rows[0], "record-000") {
 		t.Fatalf("first: %#v %v", first, err)
 	}
 	if err := os.WriteFile(path, []byte("[2026-10-12 01:00:01] [主服][昵称]<Steve> new\n"), 0600); err != nil {
@@ -84,6 +84,32 @@ func TestChatFiltersBeforePagingAndPagesStayStable(t *testing.T) {
 	service.now = func() time.Time { return first.ExpiresAt }
 	if _, err := service.Page(first.SnapshotID, 1, 100); err == nil {
 		t.Fatal("expired page accepted")
+	}
+}
+
+func TestChatFiveHundredRowPages(t *testing.T) {
+	var text strings.Builder
+	for index := 0; index < 601; index++ {
+		fmt.Fprintf(&text, "[2026-10-12 01:00:00] [主服][昵称]<Steve> record-%03d\n", index)
+	}
+	service, _, request := queryFixture(t, text.String())
+	result, err := service.Search(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for number, count := range []int{500, 101} {
+		page, err := service.Page(result.SnapshotID, number+1, 500)
+		if err != nil || page.Total != 601 || page.PageSize != 500 || len(page.Rows) != count {
+			t.Fatalf("page %d: %#v %v", number+1, page, err)
+		}
+		for index, row := range page.Rows {
+			if !strings.HasSuffix(row, fmt.Sprintf("record-%03d", number*500+index)) {
+				t.Fatalf("unexpected row on page %d: %s", number+1, row)
+			}
+		}
+	}
+	if _, err := service.Page(result.SnapshotID, 1, 501); err == nil {
+		t.Fatal("page size above 500 accepted")
 	}
 }
 

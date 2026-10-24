@@ -19,7 +19,7 @@ import (
 const (
 	queryTypeCoordinate    = "coordinate"
 	queryTypePlayerKeyword = "playerKeyword"
-	defaultLogQueryPage    = 100
+	defaultLogQueryPage    = 200
 	maxLogQueryPageSize    = 500
 	defaultPublicLogLimit  = 8
 	maxPublicLogLimit      = 5000

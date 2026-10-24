@@ -2,6 +2,7 @@
 import { computed, defineAsyncComponent, onMounted, onUnmounted, ref } from 'vue'
 import { formatReportTimeRange } from './public-report-format.js'
 import { logActionOptions } from './admin/log-action-options.js'
+import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS } from './admin/pagination.js'
 import { parseCoordinateInput, savedCoordinateInput, coordinateRangeOptions, coordinateQueryParameters } from './admin/coordinate-input.js'
 import {
   ArrowLeft,
@@ -53,6 +54,7 @@ const SettingsPage = defineAsyncComponent(() => import('./admin/SettingsPage.vue
 const settingsPage = ref(null)
 const GroupChatPage = defineAsyncComponent(() => import('./admin/GroupChatPage.vue'))
 const AdminSelect = defineAsyncComponent(() => import('./admin/AdminSelect.vue'))
+const AdminPagination = defineAsyncComponent(() => import('./admin/AdminPagination.vue'))
 const LogQueryTabs = defineAsyncComponent(() => import('./admin/LogQueryTabs.vue'))
 
 const loading = ref(false)
@@ -132,10 +134,8 @@ const SYNC_JOB_STORAGE_KEY = 'player-stats-last-sync-jobs'
 const LOG_QUERY_FORM_STORAGE_KEY = 'player-stats-log-query-forms'
 const LOG_TEXT_QUERY_FORM_STORAGE_KEY = 'player-stats-log-text-query-forms'
 const LOG_XRAY_ANALYSIS_FORM_STORAGE_KEY = 'player-stats-log-xray-analysis-forms'
-const LOG_QUERY_PAGE_SIZE_OPTIONS = [50, 100, 200, 500]
-const adminLogPageSizeOptions = LOG_QUERY_PAGE_SIZE_OPTIONS.map(value => ({ value, label: String(value) }))
-const XRAY_ORE_POSITION_PAGE_SIZE_OPTIONS = [50, 100, 200, 500]
-const adminOrePageSizeOptions = XRAY_ORE_POSITION_PAGE_SIZE_OPTIONS.map(value => ({ value, label: String(value) }))
+const LOG_QUERY_PAGE_SIZE_OPTIONS = PAGE_SIZE_OPTIONS
+const XRAY_ORE_POSITION_PAGE_SIZE_OPTIONS = PAGE_SIZE_OPTIONS
 const LOG_SHARE_PAGE_SIZE_OPTIONS = [50, 100, 200]
 const ACTIVE_JOB_STATUSES = ['PENDING', 'RUNNING', 'CANCELLING']
 
@@ -348,7 +348,7 @@ const xrayDetailEvidenceExpanded = ref(false)
 const xrayDetailEvidenceRowExpandedKeys = ref(new Set())
 const xrayDetailOrePositionsExpanded = ref(false)
 const xrayDetailOrePositionPage = ref(1)
-const xrayDetailOrePositionPageSize = ref(100)
+const xrayDetailOrePositionPageSize = ref(DEFAULT_PAGE_SIZE)
 const xrayGroupSendDialogOpen = ref(false)
 const xrayGroupSendLoading = ref(false)
 const xrayGroupSendTtlText = ref('')
@@ -389,7 +389,7 @@ const selectedLogQueryLoading = computed(() => (
     : Boolean(logQueryLoading.value[logQueryStateKey(logQueryServerId.value)])
 ))
 const selectedLogQueryPage = computed(() => selectedLogQueryResult.value?.page || logQueryPages.value[logQueryStateKey(logQueryServerId.value)] || 1)
-const selectedLogQueryPageSize = computed(() => selectedLogQueryResult.value?.pageSize || logQueryPageSizes.value[logQueryStateKey(logQueryServerId.value)] || 100)
+const selectedLogQueryPageSize = computed(() => selectedLogQueryResult.value?.pageSize || logQueryPageSizes.value[logQueryStateKey(logQueryServerId.value)] || DEFAULT_PAGE_SIZE)
 const selectedLogQueryTotalPages = computed(() => selectedLogQueryResult.value?.totalPages || 0)
 const eligibleImportFiles = computed(() => importPageFiles.value.filter(canDeleteImportRecord))
 const selectedResetCount = computed(() => selectedResetKeys.value.size)
@@ -1054,10 +1054,10 @@ async function loadLogQueryState(serverId, silent = false, queryType = logQueryM
       serverId,
       queryType,
       page: logQueryPages.value[key] || 1,
-      pageSize: logQueryPageSizes.value[key] || 100
+      pageSize: logQueryPageSizes.value[key] || DEFAULT_PAGE_SIZE
     })
     logQueryPages.value = { ...logQueryPages.value, [key]: result.page || 1 }
-    logQueryPageSizes.value = { ...logQueryPageSizes.value, [key]: result.pageSize || logQueryPageSizes.value[key] || 100 }
+    logQueryPageSizes.value = { ...logQueryPageSizes.value, [key]: result.pageSize || logQueryPageSizes.value[key] || DEFAULT_PAGE_SIZE }
     // Reset once when entering the idle state, not on every status refresh.
     // A finished query with zero matches still has a result and retains its dates.
     if (result.status === 'IDLE' && logQueryResults.value[key]?.status !== 'IDLE') {
@@ -1351,7 +1351,7 @@ function setLogQueryPage(page) {
 
 function setLogQueryPageSize(pageSize) {
   const key = logQueryStateKey(logQueryServerId.value)
-  const safePageSize = LOG_QUERY_PAGE_SIZE_OPTIONS.includes(Number(pageSize)) ? Number(pageSize) : 100
+  const safePageSize = LOG_QUERY_PAGE_SIZE_OPTIONS.includes(Number(pageSize)) ? Number(pageSize) : DEFAULT_PAGE_SIZE
   logQueryPageSizes.value = { ...logQueryPageSizes.value, [key]: safePageSize }
   logQueryPages.value = { ...logQueryPages.value, [key]: 1 }
   loadLogQueryState(logQueryServerId.value)
@@ -1968,7 +1968,7 @@ function setXrayShareOrePositionPageSize(pageSize) {
 }
 
 function setXrayDetailOrePositionPageSize(pageSize) {
-  const safePageSize = XRAY_ORE_POSITION_PAGE_SIZE_OPTIONS.includes(Number(pageSize)) ? Number(pageSize) : 100
+  const safePageSize = XRAY_ORE_POSITION_PAGE_SIZE_OPTIONS.includes(Number(pageSize)) ? Number(pageSize) : DEFAULT_PAGE_SIZE
   xrayDetailOrePositionPageSize.value = safePageSize
   xrayDetailOrePositionPage.value = 1
 }
@@ -3399,28 +3399,7 @@ function toggleAllImportFileSelection(checked) {
             第 {{ selectedLogQueryPage }} / {{ selectedLogQueryTotalPages || 1 }} 页，本页 {{ formatNumber(selectedLogQueryRows.length) }} 条，共 {{ formatNumber(selectedLogQueryResult?.matchedRows || 0) }} 条
           </span>
           <div class="pagination-controls">
-            <label>
-              <span>每页</span>
-              <AdminSelect :model-value="selectedLogQueryPageSize" :options="adminLogPageSizeOptions" label="每页条数" @update:model-value="setLogQueryPageSize" />
-            </label>
-            <button
-              class="icon-button"
-              type="button"
-              title="上一页"
-              :disabled="selectedLogQueryPage <= 1 || selectedLogQueryLoading"
-              @click="setLogQueryPage(selectedLogQueryPage - 1)"
-            >
-              <ChevronLeft :size="18" />
-            </button>
-            <button
-              class="icon-button"
-              type="button"
-              title="下一页"
-              :disabled="selectedLogQueryPage >= (selectedLogQueryTotalPages || 1) || selectedLogQueryLoading"
-              @click="setLogQueryPage(selectedLogQueryPage + 1)"
-            >
-              <ChevronRight :size="18" />
-            </button>
+            <AdminPagination :page="selectedLogQueryPage" :total-pages="selectedLogQueryTotalPages || 1" :page-size="selectedLogQueryPageSize" :loading="selectedLogQueryLoading" @page="setLogQueryPage" @page-size="setLogQueryPageSize" />
           </div>
         </div>
         <div class="table-wrap log-query-table-wrap">
@@ -3493,28 +3472,7 @@ function toggleAllImportFileSelection(checked) {
             第 {{ selectedLogQueryPage }} / {{ selectedLogQueryTotalPages || 1 }} 页，本页 {{ formatNumber(selectedLogQueryRows.length) }} 条，共 {{ formatNumber(selectedLogQueryResult?.matchedRows || 0) }} 条
           </span>
           <div class="pagination-controls">
-            <label>
-              <span>每页</span>
-              <AdminSelect :model-value="selectedLogQueryPageSize" :options="adminLogPageSizeOptions" label="每页条数" @update:model-value="setLogQueryPageSize" />
-            </label>
-            <button
-              class="icon-button"
-              type="button"
-              title="上一页"
-              :disabled="selectedLogQueryPage <= 1 || selectedLogQueryLoading"
-              @click="setLogQueryPage(selectedLogQueryPage - 1)"
-            >
-              <ChevronLeft :size="18" />
-            </button>
-            <button
-              class="icon-button"
-              type="button"
-              title="下一页"
-              :disabled="selectedLogQueryPage >= (selectedLogQueryTotalPages || 1) || selectedLogQueryLoading"
-              @click="setLogQueryPage(selectedLogQueryPage + 1)"
-            >
-              <ChevronRight :size="18" />
-            </button>
+            <AdminPagination :page="selectedLogQueryPage" :total-pages="selectedLogQueryTotalPages || 1" :page-size="selectedLogQueryPageSize" :loading="selectedLogQueryLoading" @page="setLogQueryPage" @page-size="setLogQueryPageSize" />
             <button class="secondary-button" type="button" @click="scrollLogQueryToTop">
               <ArrowUp :size="18" />
               <span>返回顶部</span>
@@ -3771,16 +3729,7 @@ function toggleAllImportFileSelection(checked) {
                     第 {{ clampPage(xrayDetailOrePositionPage, xrayDetailOrePositionTotalPages) }} / {{ xrayDetailOrePositionTotalPages }} 页，本页 {{ formatNumber(xrayDetailPagedRareOreRows.length) }} 条，共 {{ formatNumber(xrayDetailRareOreRows.length) }} 条
                   </span>
                   <div class="pagination-controls">
-                    <label>
-                      <span>每页</span>
-                      <AdminSelect :model-value="xrayDetailOrePositionPageSize" :options="adminOrePageSizeOptions" label="每页条数" @update:model-value="setXrayDetailOrePositionPageSize" />
-                    </label>
-                    <button class="icon-button" type="button" title="上一页" :disabled="xrayDetailOrePositionPage <= 1" @click="setXrayDetailOrePositionPage(xrayDetailOrePositionPage - 1)">
-                      <ChevronLeft :size="18" />
-                    </button>
-                    <button class="icon-button" type="button" title="下一页" :disabled="xrayDetailOrePositionPage >= xrayDetailOrePositionTotalPages" @click="setXrayDetailOrePositionPage(xrayDetailOrePositionPage + 1)">
-                      <ChevronRight :size="18" />
-                    </button>
+                    <AdminPagination :page="clampPage(xrayDetailOrePositionPage, xrayDetailOrePositionTotalPages)" :total-pages="xrayDetailOrePositionTotalPages" :page-size="xrayDetailOrePositionPageSize" @page="setXrayDetailOrePositionPage" @page-size="setXrayDetailOrePositionPageSize" />
                   </div>
                 </div>
                 <table class="xray-ore-position-table">
@@ -3808,16 +3757,7 @@ function toggleAllImportFileSelection(checked) {
                     第 {{ clampPage(xrayDetailOrePositionPage, xrayDetailOrePositionTotalPages) }} / {{ xrayDetailOrePositionTotalPages }} 页，本页 {{ formatNumber(xrayDetailPagedRareOreRows.length) }} 条，共 {{ formatNumber(xrayDetailRareOreRows.length) }} 条
                   </span>
                   <div class="pagination-controls">
-                    <label>
-                      <span>每页</span>
-                      <AdminSelect :model-value="xrayDetailOrePositionPageSize" :options="adminOrePageSizeOptions" label="每页条数" @update:model-value="setXrayDetailOrePositionPageSize" />
-                    </label>
-                    <button class="icon-button" type="button" title="上一页" :disabled="xrayDetailOrePositionPage <= 1" @click="setXrayDetailOrePositionPage(xrayDetailOrePositionPage - 1)">
-                      <ChevronLeft :size="18" />
-                    </button>
-                    <button class="icon-button" type="button" title="下一页" :disabled="xrayDetailOrePositionPage >= xrayDetailOrePositionTotalPages" @click="setXrayDetailOrePositionPage(xrayDetailOrePositionPage + 1)">
-                      <ChevronRight :size="18" />
-                    </button>
+                    <AdminPagination :page="clampPage(xrayDetailOrePositionPage, xrayDetailOrePositionTotalPages)" :total-pages="xrayDetailOrePositionTotalPages" :page-size="xrayDetailOrePositionPageSize" @page="setXrayDetailOrePositionPage" @page-size="setXrayDetailOrePositionPageSize" />
                     <button class="secondary-button" type="button" @click="scrollToXrayDetailOrePositions">
                       <ArrowUp :size="18" />
                       <span>返回稀有矿位置</span>

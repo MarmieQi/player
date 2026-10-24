@@ -161,7 +161,7 @@ func (s *QueryService) Search(ctx context.Context, request QueryRequest) (QueryP
 		totalBytes -= oldest.bytes
 	}
 	s.snapshots[snapshot.id] = snapshot
-	return snapshot.page(1, 100), nil
+	return snapshot.page(1, 200), nil
 }
 
 func scanChatFiles(ctx context.Context, files queryFiles, request QueryRequest, zone *time.Location) (*querySnapshot, error) {
@@ -260,7 +260,7 @@ func (s *querySnapshot) page(page, size int) QueryPage {
 	return QueryPage{s.id, s.created, s.expires, len(s.rows), page, size, rows, s.players, s.missing}
 }
 func (s *QueryService) Page(id string, page, size int) (QueryPage, error) {
-	if page < 1 || page > 100000 || size < 1 || size > 200 {
+	if page < 1 || page > 100000 || size < 1 || size > 500 {
 		return QueryPage{}, auth.NewHTTPError(400, "分页参数无效")
 	}
 	s.mu.Lock()

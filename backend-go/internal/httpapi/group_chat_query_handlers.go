@@ -27,7 +27,7 @@ func (s *Server) queryGroupChat(w http.ResponseWriter, r *http.Request) {
 	s.writeHTTPErrorResult(w, 200, result, err)
 }
 func (s *Server) groupChatQueryPage(w http.ResponseWriter, r *http.Request) {
-	page, size := 1, 100
+	page, size := 1, 200
 	if value := r.URL.Query().Get("page"); value != "" {
 		page, _ = strconv.Atoi(value)
 	}
