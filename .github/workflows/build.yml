@@ -12,28 +12,12 @@ permissions:
 
 env:
   BACKEND_IMAGE: ghcr.io/marmieqi/player-backend
-  MIGRATOR_IMAGE: ghcr.io/marmieqi/player-backend
   FRONTEND_IMAGE: ghcr.io/marmieqi/player-frontend
 
 jobs:
   go-backend:
     name: Go backend
     runs-on: ubuntu-latest
-    services:
-      mysql:
-        image: mysql:8.4
-        env:
-          MYSQL_ROOT_PASSWORD: ci-only-test-password
-          MYSQL_DATABASE: player_stats_test
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="mysqladmin ping -h localhost -pci-only-test-password"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=10
-    env:
-      PLAYER_TEST_MYSQL_DSN: root:ci-only-test-password@tcp(127.0.0.1:3306)/player_stats_test?parseTime=true&charset=utf8mb4
     defaults:
       run:
         working-directory: backend-go
@@ -63,7 +47,6 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           go build -trimpath -o player-stats-backend ./cmd/player-stats
-          go build -trimpath -o config-migrate ./cmd/config-migrate
           if go list -deps ./cmd/player-stats | grep -q 'github.com/go-sql-driver/mysql'; then
             echo 'MySQL driver leaked into the runtime server'
             exit 1
@@ -108,8 +91,6 @@ jobs:
       - name: Check deployment configuration
         run: |
           python3 scripts/check-compose.py
-          sh -n scripts/migrate-sqlite.sh
-          python3 scripts/check-sqlite-migration.py
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -141,12 +122,3 @@ jobs:
             ${{ env.FRONTEND_IMAGE }}:latest
             ${{ env.FRONTEND_IMAGE }}:main
             ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
-
-      - name: Build one-shot migration image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./backend-go
-          file: ./backend-go/Dockerfile.migrate
-          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          tags: |
-            ${{ env.MIGRATOR_IMAGE }}:config-migrate-${{ github.sha }}

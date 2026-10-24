@@ -140,7 +140,7 @@ func TestSQLitePublicReportsAndPluginHTTP(t *testing.T) {
 			f.request(t, "GET", "/api/stats/player?playerName=alex", nil, identity, 401, nil)
 			f.request(t, "POST", "/api/share/tokens", map[string]string{"playerName": "Älex"}, identity, 401, nil)
 		}
-		for _, path := range []string{"/api/admin/settings/smb", "/api/config/sync", "/api/stats/overview", "/api/import/files", "/api/stats/player-suggestions?q=a"} {
+		for _, path := range []string{"/api/admin/settings/smb", "/api/stats/overview", "/api/import/files", "/api/stats/player-suggestions?q=a"} {
 			f.request(t, "GET", path, nil, "plugin", 401, nil)
 		}
 		f.request(t, "GET", "/api/stats/player?playerName=%C3%A4LEX", nil, "plugin", 200, nil)
@@ -392,4 +392,65 @@ func TestSQLiteUnifiedPlayerSuggestionsAcrossSources(t *testing.T) {
 	}
 	f.request(t, "GET", "/api/stats/player-suggestions?serverId=all&q=a", nil, "", 401, nil)
 	f.request(t, "GET", "/api/stats/player-suggestions?serverId=all&q=a", nil, "plugin", 401, nil)
+}
+
+func TestSQLiteSettingsOnlyUseCanonicalConfigurationRoutes(t *testing.T) {
+	f := newPublicFixture(t)
+	ctx := context.Background()
+	// Removed routes cannot read or change configuration, even for an admin.
+	paths := []string{"/api/config/sync", "/api/admin/group-chat/config", "/api/admin/group-chat/copy-schedule"}
+	for _, path := range paths {
+		for _, method := range []string{"GET", "PUT"} {
+			f.request(t, method, path, map[string]any{"enabled": true, "skipToday": false}, "admin", 404, nil)
+		}
+	}
+	for _, path := range []string{"/api/config/astrbot-key", "/api/config/source-files", "/api/admin/group-chat/directory-files"} {
+		f.request(t, "GET", path, nil, "admin", 404, nil)
+	}
+	for _, path := range []string{"/api/config/astrbot-key/reset", "/api/config/smb-test"} {
+		f.request(t, "POST", path, nil, "admin", 404, nil)
+	}
+	for _, section := range []string{"smb", "schedules", "sharing", "runtime"} {
+		var current map[string]any
+		f.request(t, "GET", "/api/admin/settings/"+section, nil, "admin", 200, &current)
+		if _, old := current["autoRun"]; old {
+			t.Fatal("mixed config field still exposed")
+		}
+		if _, old := current["syncCron"]; old {
+			t.Fatal("cron compatibility field still exposed")
+		}
+		if section == "smb" {
+			for _, source := range current["sources"].([]any) {
+				if _, old := source.(map[string]any)["id"]; old {
+					t.Fatal("synthetic source ID still exposed")
+				}
+			}
+		}
+		request := current
+		if section == "runtime" {
+			request = current["saved"].(map[string]any)
+		}
+		f.request(t, "PUT", "/api/admin/settings/"+section, request, "admin", 200, nil)
+		request["autoRun"] = true
+		f.request(t, "PUT", "/api/admin/settings/"+section, request, "admin", 400, nil)
+	}
+	f.request(t, "PUT", "/api/admin/settings/sharing", map[string]int{"shareTtlMinutes": 1, "logQueryShareTtlMinutes": 60}, "admin", 400, nil)
+	var key settings.AstrBotKeyResponse
+	f.request(t, "GET", "/api/admin/settings/plugin-key", nil, "admin", 200, &key)
+	if key.APIKey != f.key {
+		t.Fatal("removed endpoint changed plugin key")
+	}
+	f.request(t, "GET", "/api/admin/settings/plugin-key", nil, "plugin", 401, nil)
+	f.request(t, "POST", "/api/admin/settings/plugin-key/reset", nil, "plugin", 401, nil)
+	f.request(t, "POST", "/api/admin/settings/smb/test", nil, "plugin", 401, nil)
+	f.request(t, "GET", "/api/admin/settings/smb/files?sourceId=main", nil, "plugin", 401, nil)
+	f.request(t, "GET", "/api/admin/settings/smb/chat-files", nil, "plugin", 401, nil)
+	var count int
+	if e := f.db.QueryRowContext(ctx, `select count(*) from import_files`).Scan(&count); e != nil || count != 2 {
+		t.Fatalf("settings cleanup changed imported data: %d %v", count, e)
+	}
+	var skip bool
+	if e := f.db.QueryRowContext(ctx, `select skip_today from ingest_policy`).Scan(&skip); e != nil || !skip {
+		t.Fatal("removed configuration endpoint changed date policy", e)
+	}
 }

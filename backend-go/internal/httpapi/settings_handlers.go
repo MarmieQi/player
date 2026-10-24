@@ -69,5 +69,5 @@ func (s *Server) settingsSection(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "找不到设置分组")
 		return
 	}
-	s.writeServiceResult(w, result, err)
+	s.writeHTTPErrorResult(w, http.StatusOK, result, err)
 }

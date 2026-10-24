@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"player-stats-backend-go/internal/importer"
+	"player-stats-backend-go/internal/settings"
 	"testing"
 	"time"
 )
@@ -20,8 +21,8 @@ type fakeScheduledCopy struct {
 }
 
 func (f *fakeScheduledCopy) Schedule(context.Context) (CopySchedule, error) { return f.schedule, nil }
-func (f *fakeScheduledCopy) Config(context.Context) (CopyConfig, error) {
-	return CopyConfig{Enabled: f.sourceEnabled}, nil
+func (f *fakeScheduledCopy) Config(context.Context) (settings.ChatDirectory, error) {
+	return settings.ChatDirectory{Enabled: f.sourceEnabled}, nil
 }
 func (f *fakeScheduledCopy) Start(_ context.Context, skip bool) (importer.ImportJobView, error) {
 	f.starts++
@@ -80,16 +81,5 @@ func TestChatScheduleConflictIsLoggedWithoutRetryStorm(t *testing.T) {
 	s.check(context.Background(), now)
 	if f.starts != 1 || f.records != 1 {
 		t.Fatalf("starts=%d logs=%d", f.starts, f.records)
-	}
-}
-
-func TestNormalizeChatCopySchedule(t *testing.T) {
-	for _, value := range []string{"", "9:30", "24:00", "12:60", "12:30:00"} {
-		if _, err := normalizeSchedule(CopySchedule{Time: value}); err == nil {
-			t.Errorf("accepted %q", value)
-		}
-	}
-	if _, err := normalizeSchedule(CopySchedule{Time: "23:59"}); err != nil {
-		t.Fatal(err)
 	}
 }

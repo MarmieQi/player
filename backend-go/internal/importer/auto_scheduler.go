@@ -71,14 +71,14 @@ func (s *AutoTaskScheduler) loop() {
 func (s *AutoTaskScheduler) check(now time.Time) {
 	ctx, cancel := context.WithTimeout(s.lifetime, 5*time.Second)
 	defer cancel()
-	cfg, err := s.settings.GetSyncConfig(ctx)
+	cfg, err := s.settings.Schedules(ctx)
 	if err != nil {
 		s.logger.Warn("auto task config load failed", "error", err)
 		return
 	}
 	currentTime := now.Format("15:04")
 	currentDate := now.Format("2006-01-02")
-	for _, task := range cfg.AutoTasks {
+	for _, task := range cfg.Tasks {
 		if task.SyncEnabled && task.SyncTime == currentTime {
 			s.launch(currentDate, task, "SYNC", cfg.SkipToday)
 		}

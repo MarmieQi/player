@@ -14,8 +14,7 @@ type RuntimeResponse struct {
 	RestartRequired bool                     `json:"restartRequired"`
 }
 
-// InitializeRuntime loads persisted tuning. Only the one-shot legacy migration
-// tool reads retired environment defaults; server restarts never overwrite rows.
+// InitializeRuntime loads persisted tuning; server restarts never overwrite rows.
 func InitializeRuntime(ctx context.Context, db *storage.DB, cfg config.Config) (config.Config, error) {
 	p, err := readRuntime(ctx, db)
 	if err != nil {

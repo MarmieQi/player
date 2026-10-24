@@ -4,7 +4,7 @@
 
 当前后端是 Go：`backend-go`。前端目录是 Vue 3：`frontend-vue`。
 
-> 本版运行时只使用 SQLite。已有 MySQL 服务器先按 [迁移指南](SQLITE-MIGRATION.md) 操作，不要直接切换镜像。
+> 本项目只支持 SQLite，存储与配置职责见 [SQLite 存储说明](SQLITE-STORAGE.md)。
 
 ## Docker 部署
 
@@ -63,13 +63,13 @@ docker compose logs --tail=100 backend frontend
 
 `.env` 的 `IMAGE_TAG` 同时控制前后端版本，默认 `latest`。需要配套部署或回滚时，填写同一次成功构建的完整提交 SHA；回滚应用前另行确认数据库迁移兼容性，不能仅靠切换镜像恢复数据库。
 
-只有服务结构发生变化时才更新 Compose：先下载为 `docker-compose.yml.new`，对照并保留本地定制，备份原文件后再替换；不要重复复制模板覆盖 `.env`。clone 部署先确认本地配置已迁出 Compose，再拉取代码。旧 MySQL 部署不能直接套用本节，必须先完成 [SQLite 配置迁移](SQLITE-MIGRATION.md)。
+只有服务结构发生变化时才更新 Compose：先下载为 `docker-compose.yml.new`，对照并保留本地定制，备份原文件后再替换；不要重复复制模板覆盖 `.env`。clone 部署先确认本地配置已迁出 Compose，再拉取代码。更新会直接复用现有 SQLite 配置和统计数据，无需重新导入。
 
 ## 配置维护
 
 服务器启动参数只在 `.env` 中修改，SMB、日志源、跳过当天及自动任务、分享有效期在后台“系统设置”中修改。管理员密码在“个人中心”修改。
 
-旧 Compose 到 `.env` 的一次性迁移已完成，当前版本不再附带迁移工具或 SMB 环境变量初始化入口。已有 `.env` 中遗留的 `PLAYER_LOGS_SMB_*` 和 `PLAYER_LOGS_IMPORTER_SKIP_TODAY` 不再传入后端，可在维护配置时删除；数据库里的业务设置不会因此清空或覆盖。
+配置只有两个入口：部署参数位于 `.env`；业务设置位于 SQLite，通过 `/api/admin/settings/` 分组保存。SMB、任务、分享及运行参数不从环境变量导入，也没有旧混合配置接口。
 
 保留当前 `.env` 的密码、JWT 密钥、端口、镜像标签与数据路径，升级时不要重新复制模板。启动参数修改后通过 `docker compose up -d` 重建对应容器生效；直接运行 Go 后端仍读取进程环境变量。
 

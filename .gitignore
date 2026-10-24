@@ -33,6 +33,4 @@ __pycache__/
 *.db.lock
 /backend-go/player-stats
 /backend-go/player-stats.exe
-/backend-go/config-migrate
-/backend-go/config-migrate.exe
 /database/

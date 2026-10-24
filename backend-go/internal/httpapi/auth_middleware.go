@@ -44,8 +44,7 @@ func (s *Server) isPluginStatsRequest(r *http.Request) bool {
 func (s *Server) requiresAdminAuth(r *http.Request) bool {
 	path := r.URL.Path
 	if strings.HasPrefix(path, "/api/admin/") || strings.HasPrefix(path, "/api/import/") ||
-		strings.HasPrefix(path, "/api/stats/") ||
-		strings.HasPrefix(path, "/api/config/") {
+		strings.HasPrefix(path, "/api/stats/") {
 		return true
 	}
 	if path == "/api/share/xray/send-to-group" ||

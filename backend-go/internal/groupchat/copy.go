@@ -13,8 +13,6 @@ import (
 	"player-stats-backend-go/internal/settings"
 )
 
-type CopyConfig = settings.ChatDirectory
-
 type CopyService struct {
 	db          *storage.DB
 	archiveRoot string
@@ -28,21 +26,10 @@ func NewCopyService(db *storage.DB, cfg config.Config, copier *importer.Service)
 
 func (s *CopyService) Close() { s.jobs.Close() }
 
-func NormalizeCopyConfig(c CopyConfig) (CopyConfig, error) { return settings.NormalizeChatDirectory(c) }
-
-func (s *CopyService) Config(ctx context.Context) (CopyConfig, error) {
-	var c CopyConfig
+func (s *CopyService) Config(ctx context.Context) (settings.ChatDirectory, error) {
+	var c settings.ChatDirectory
 	err := s.db.QueryRowContext(ctx, `select enabled,smb_directory,smb_file_glob from log_sources where source_id='group-chat'`).Scan(&c.Enabled, &c.SMBDirectory, &c.FileGlob)
 	return c, err
-}
-
-func (s *CopyService) SaveConfig(ctx context.Context, c CopyConfig) (CopyConfig, error) {
-	normalized, err := NormalizeCopyConfig(c)
-	if err != nil {
-		return c, err
-	}
-	_, err = s.db.ExecContext(ctx, `update log_sources set enabled=?,smb_directory=?,smb_file_glob=? where source_id='group-chat'`, normalized.Enabled, normalized.SMBDirectory, normalized.FileGlob)
-	return normalized, err
 }
 
 func (s *CopyService) source(ctx context.Context) (importer.ArchiveCopySource, error) {
@@ -53,7 +40,7 @@ func (s *CopyService) archiveSource(ctx context.Context, requireEnabled bool) (i
 	if err != nil {
 		return importer.ArchiveCopySource{}, err
 	}
-	c, err = NormalizeCopyConfig(c)
+	c, err = settings.NormalizeChatDirectory(c)
 	if err != nil {
 		return importer.ArchiveCopySource{}, err
 	}

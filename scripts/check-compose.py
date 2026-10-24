@@ -82,14 +82,6 @@ class ComposeConfigTests(unittest.TestCase):
             self.assertTrue(Path(mount["source"]).resolve().is_relative_to((ROOT / "custom-data").resolve()))
         self.assertEqual([p["published"] for p in services["frontend"]["ports"]], ["19493", "18843"])
 
-    def test_one_shot_migration_keeps_credentials_out_of_arguments(self):
-        result = render(REQUIRED | {"IMAGE_TAG": "fixture-sha", "MYSQL_PASSWORD": "fixture $secret # value", "MYSQL_USER": "fixture_user", "MYSQL_DATABASE": "fixture_db"}, "compose.migrate.yml")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        service = json.loads(result.stdout.replace("$$", "$"))["services"]["config-migrate"]
-        self.assertNotIn("fixture $secret", " ".join(service["command"]))
-        self.assertEqual(service["environment"]["MYSQL_PASSWORD"], "fixture $secret # value")
-        self.assertEqual(service["image"], "ghcr.io/marmieqi/player-backend:config-migrate-fixture-sha")
-
     def test_forwarded_backend_environment_is_actually_read(self):
         services = self.config()
         source = (ROOT / "backend-go/internal/config/config.go").read_text(encoding="utf-8")

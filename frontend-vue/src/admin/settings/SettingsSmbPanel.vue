@@ -11,7 +11,7 @@ const abort = new AbortController()
 async function test() {
   if (testing.value || props.dirty || props.saving) return
   testing.value = true; message.value = ''; error.value = ''
-  try { const response = await apiPost('/api/config/smb-test', {}, { signal: abort.signal }); if (!response.success) throw new Error(response.message); message.value = response.message }
+  try { const response = await apiPost('/api/admin/settings/smb/test', {}, { signal: abort.signal }); if (!response.success) throw new Error(response.message); message.value = response.message }
   catch (err) { if (err.name !== 'AbortError') error.value = err.message }
   finally { testing.value = false }
 }
@@ -20,7 +20,7 @@ async function preview(id) {
   previews[id] = { loading: true, files: [], listed: false }
   error.value = ''
   try {
-    const response = id === 'chat' ? await apiGet('/api/admin/group-chat/directory-files', {}, { signal: abort.signal }) : await apiGet('/api/config/source-files', { sourceId: id }, { signal: abort.signal })
+    const response = id === 'chat' ? await apiGet('/api/admin/settings/smb/chat-files', {}, { signal: abort.signal }) : await apiGet('/api/admin/settings/smb/files', { sourceId: id }, { signal: abort.signal })
     if (id !== 'chat' && !response.success) throw new Error(response.message)
     previews[id] = { loading: false, files: id === 'chat' ? response : response.files, listed: true }
   } catch (err) { if (err.name !== 'AbortError') error.value = err.message; previews[id].loading = false }

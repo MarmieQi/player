@@ -48,4 +48,4 @@ GET /api/stats/server-time
 docker compose up -d
 ```
 
-正式镜像使用纯 Go SQLite 驱动，不需要 CGO 或 MySQL 服务。数据库位于 `/data/database/player.db`，挂载整个目录。版本迁移见根目录 SQLITE-MIGRATION.md。
+正式镜像使用纯 Go SQLite 驱动，不需要 CGO 或 MySQL 服务。数据库位于 `/data/database/player.db`，挂载整个目录。连接、表版本及配置职责见根目录 SQLITE-STORAGE.md。

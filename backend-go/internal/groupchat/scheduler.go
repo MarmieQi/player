@@ -4,12 +4,13 @@ import (
 	"context"
 	"log/slog"
 	"player-stats-backend-go/internal/importer"
+	"player-stats-backend-go/internal/settings"
 	"time"
 )
 
 type scheduledCopier interface {
 	Schedule(context.Context) (CopySchedule, error)
-	Config(context.Context) (CopyConfig, error)
+	Config(context.Context) (settings.ChatDirectory, error)
 	Start(context.Context, bool) (importer.ImportJobView, error)
 	Job(string) (importer.ImportJobView, error)
 	recordScheduled(context.Context, importer.ImportJobView, string) error

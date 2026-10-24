@@ -9,10 +9,10 @@ import (
 func TestGroupChatCopyRequiresAdmin(t *testing.T) {
 	s := &Server{}
 	for _, target := range []struct{ method, path string }{
-		{"GET", "/api/admin/group-chat/copy-schedule"}, {"PUT", "/api/admin/group-chat/copy-schedule"}, {"GET", "/api/admin/group-chat/local-files"}, {"POST", "/api/admin/group-chat/local-files/delete"}, {"GET", "/api/admin/group-chat/config"}, {"PUT", "/api/admin/group-chat/config"},
+		{"GET", "/api/admin/group-chat/local-files"}, {"POST", "/api/admin/group-chat/local-files/delete"},
 		{"POST", "/api/admin/group-chat/query"}, {"GET", "/api/admin/group-chat/query/snapshot"},
 		{"GET", "/api/admin/group-chat/files"}, {"POST", "/api/admin/group-chat/copy-jobs"},
-		{"GET", "/api/admin/group-chat/directory-files"},
+		{"GET", "/api/admin/settings/smb/chat-files"},
 		{"GET", "/api/admin/group-chat/copy-jobs/id"},
 	} {
 		called := false

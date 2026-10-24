@@ -8,14 +8,14 @@ const key = ref(''), loading = ref(true), resetting = ref(false), error = ref(''
 const abort = new AbortController()
 async function load() {
   loading.value = true; error.value = ''
-  try { key.value = (await apiGet('/api/config/astrbot-key', {}, { signal: abort.signal })).apiKey }
+  try { key.value = (await apiGet('/api/admin/settings/plugin-key', {}, { signal: abort.signal })).apiKey }
   catch (err) { if (err.name !== 'AbortError') error.value = err.message }
   finally { loading.value = false }
 }
 async function reset() {
   if (resetting.value || !window.confirm('重置后旧插件密钥立即失效，确定重置吗？')) return
   resetting.value = true; error.value = ''; message.value = ''
-  try { key.value = (await apiPost('/api/config/astrbot-key/reset', {}, { signal: abort.signal })).apiKey; message.value = '密钥已重置，请更新插件配置' }
+  try { key.value = (await apiPost('/api/admin/settings/plugin-key/reset', {}, { signal: abort.signal })).apiKey; message.value = '密钥已重置，请更新插件配置' }
   catch (err) { if (err.name !== 'AbortError') error.value = err.message }
   finally { resetting.value = false }
 }

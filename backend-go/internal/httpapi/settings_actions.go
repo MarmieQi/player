@@ -1,26 +1,10 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"net/http"
 
-	"player-stats-backend-go/internal/settings"
+	"player-stats-backend-go/internal/importer"
 )
-
-func (s *Server) configSync(w http.ResponseWriter, r *http.Request) {
-	response, err := s.settingsService.GetSyncConfig(r.Context())
-	s.writeServiceResult(w, response, err)
-}
-
-func (s *Server) saveConfigSync(w http.ResponseWriter, r *http.Request) {
-	var request settings.SyncConfigResponse
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "请求体不是有效 JSON")
-		return
-	}
-	response, err := s.settingsService.SaveSyncConfig(r.Context(), request)
-	s.writeServiceResult(w, response, err)
-}
 
 func (s *Server) astrBotKey(w http.ResponseWriter, r *http.Request) {
 	response, err := s.settingsService.AstrBotKey(r.Context())
@@ -50,14 +34,9 @@ func (s *Server) smbTest(w http.ResponseWriter, r *http.Request) {
 func (s *Server) sourceFiles(w http.ResponseWriter, r *http.Request) {
 	metadata, err := s.importService.ListSourceDirectoryFiles(r.Context(), r.URL.Query().Get("sourceId"))
 	if err == nil {
-		files := make([]settings.RemoteLogFile, 0, len(metadata))
-		for _, status := range metadata {
-			files = append(files, settings.RemoteLogFile{
-				FileName:     status.FileName,
-				Path:         status.Path,
-				Size:         status.Size,
-				LastModified: status.LastModified,
-			})
+		files := metadata
+		if files == nil {
+			files = []importer.RemoteLogFile{}
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"success": true, "files": files})
 		return
