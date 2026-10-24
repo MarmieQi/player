@@ -4,7 +4,7 @@ import { Search, UserRound, ArrowUpLeft } from 'lucide-vue-next'
 import { apiGet } from '../api.js'
 import { createPlayerSuggestionSearch } from './player-suggestions.js'
 
-const props = defineProps({ modelValue: { type: String, default: '' }, serverId: { type: String, required: true }, placeholder: { type: String, default: '输入玩家名搜索' }, requestSuggestions: Function })
+const props = defineProps({ modelValue: { type: String, default: '' }, serverId: { type: String, required: true }, placeholder: { type: String, default: '输入玩家名搜索' } })
 const emit = defineEmits(['update:modelValue', 'change'])
 const id = useId()
 const root = ref(null)
@@ -13,7 +13,7 @@ const active = ref(-1)
 const composing = ref(false)
 const state = ref({ items: [], loading: false, error: '' })
 const suggestions = createPlayerSuggestionSearch({
-  request: (serverId, query, signal) => props.requestSuggestions ? props.requestSuggestions(query, signal) : apiGet('/api/stats/player-suggestions', { serverId, q: query }, { signal }),
+  request: (serverId, query, signal) => apiGet('/api/stats/player-suggestions', { serverId, q: query }, { signal }),
   onChange: value => { state.value = value; active.value = -1 }
 })
 function input(event) {

@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"player-stats-backend-go/internal/auth"
+	"player-stats-backend-go/internal/config"
 	"player-stats-backend-go/internal/importer"
+	"player-stats-backend-go/internal/settings"
 	"time"
 )
 
@@ -27,8 +29,7 @@ func normalizeSchedule(c CopySchedule) (CopySchedule, error) {
 func (s *CopyService) Schedule(ctx context.Context) (CopySchedule, error) {
 	var c CopySchedule
 	// CSV and TXT automatic tasks share the existing global date policy.
-	err := s.db.QueryRowContext(ctx, `select chat.auto_enabled, chat.auto_time, sync.skip_today
- from group_chat_copy_config chat join sync_config sync on sync.id = 1 where chat.id = 1`).Scan(&c.Enabled, &c.Time, &c.SkipToday)
+	err := s.db.QueryRowContext(ctx, `select t.enabled,t.run_time,p.skip_today from task_schedules t join ingest_policy p on p.id=1 where t.source_id='group-chat' and t.kind='SYNC'`).Scan(&c.Enabled, &c.Time, &c.SkipToday)
 	return c, err
 }
 
@@ -42,7 +43,7 @@ func (s *CopyService) SaveSchedule(ctx context.Context, c CopySchedule) (CopySch
 			return c, err
 		}
 	}
-	_, err = s.db.ExecContext(ctx, `update group_chat_copy_config set auto_enabled = ?, auto_time = ? where id = 1`, c.Enabled, c.Time)
+	_, err = s.db.ExecContext(ctx, `update task_schedules set enabled=?,run_time=? where source_id='group-chat' and kind='SYNC'`, c.Enabled, c.Time)
 	if err != nil {
 		return c, err
 	}
@@ -53,8 +54,9 @@ func (s *CopyService) recordScheduled(ctx context.Context, job importer.ImportJo
 	if message == "" {
 		message = fmt.Sprintf("自动同步 TXT：成功 %d，跳过 %d，失败 %d", job.ImportedFiles, job.SkippedFiles, job.FailedFiles)
 	}
-	_, err := s.db.ExecContext(ctx, `insert into auto_task_logs
- (created_at,server_id,server_name,task_type,task_label,status,message,scanned_files,success_files,skipped_files,failed_files)
- values (?, 'group-chat', '群服聊天', 'CHAT_SYNC', '群服聊天：自动同步 TXT', ?, ?, ?, ?, ?, ?)`, time.Now().UTC(), job.Status, message, job.ScannedFiles, job.ImportedFiles, job.SkippedFiles, job.FailedFiles)
-	return err
+	return settings.NewService(s.db, config.Config{}).RecordTask(ctx, job.Status, message, "", job.ScannedFiles, job.ImportedFiles, job.SkippedFiles, job.FailedFiles)
+}
+func (s *CopyService) claimScheduled(ctx context.Context, now time.Time) (context.Context, bool, error) {
+	id, ok, err := settings.NewService(s.db, config.Config{}).ClaimTask(ctx, "group-chat", "SYNC", now)
+	return settings.WithRunID(ctx, id), ok, err
 }

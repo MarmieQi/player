@@ -26,3 +26,13 @@ __pycache__/
 .env
 .env.*
 !.env.example
+
+# SQLite sidecars and local Go binaries
+*.db-wal
+*.db-shm
+*.db.lock
+/backend-go/player-stats
+/backend-go/player-stats.exe
+/backend-go/config-migrate
+/backend-go/config-migrate.exe
+/database/

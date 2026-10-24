@@ -236,23 +236,23 @@ func (s *XrayAnalysisService) saveState(ctx context.Context, state *xrayState) e
 			message, payload_json
 		)
 		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		on duplicate key update
-			server_id = values(server_id),
-			server_name = values(server_name),
-			status = values(status),
-			finished_at = values(finished_at),
-			from_time = values(from_time),
-			to_time = values(to_time),
-			player_name = values(player_name),
-			dimension = values(dimension),
-			scanned_files = values(scanned_files),
-			scanned_rows = values(scanned_rows),
-			failed_files = values(failed_files),
-			player_count = values(player_count),
-			finding_count = values(finding_count),
-			max_risk_score = values(max_risk_score),
-			message = values(message),
-			payload_json = values(payload_json)
+		on conflict(job_id) do update set
+			server_id = excluded.server_id,
+			server_name = excluded.server_name,
+			status = excluded.status,
+			finished_at = excluded.finished_at,
+			from_time = excluded.from_time,
+			to_time = excluded.to_time,
+			player_name = excluded.player_name,
+			dimension = excluded.dimension,
+			scanned_files = excluded.scanned_files,
+			scanned_rows = excluded.scanned_rows,
+			failed_files = excluded.failed_files,
+			player_count = excluded.player_count,
+			finding_count = excluded.finding_count,
+			max_risk_score = excluded.max_risk_score,
+			message = excluded.message,
+			payload_json = excluded.payload_json
 	`, view.JobID, view.ServerID, view.ServerName, view.Status, view.StartedAt, view.FinishedAt,
 		xrayDateTimeArg(view.FromTime), xrayDateTimeArg(view.ToTime), view.PlayerName, view.Dimension,
 		view.ScannedFiles, view.ScannedRows, view.FailedFiles, view.PlayerCount, view.FindingCount,

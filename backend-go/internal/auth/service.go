@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"player-stats-backend-go/internal/storage"
 	"strings"
 	"time"
 
@@ -21,7 +22,7 @@ import (
 const BearerPrefix = "Bearer "
 
 type Service struct {
-	db  *sql.DB
+	db  *storage.DB
 	cfg config.Config
 }
 
@@ -54,7 +55,7 @@ type user struct {
 	Enabled      bool
 }
 
-func NewService(db *sql.DB, cfg config.Config) *Service {
+func NewService(db *storage.DB, cfg config.Config) *Service {
 	return &Service{db: db, cfg: cfg}
 }
 
@@ -64,7 +65,7 @@ func (s *Service) EnsureAdmin(ctx context.Context) error {
 		username = "admin"
 	}
 	var exists int
-	err := s.db.QueryRowContext(ctx, `select count(*) from admin_users where lower(username) = lower(?)`, username).Scan(&exists)
+	err := s.db.QueryRowContext(ctx, `select count(*) from admin_users where username_key = account_key(?)`, username).Scan(&exists)
 	if err != nil {
 		return err
 	}
@@ -77,9 +78,9 @@ func (s *Service) EnsureAdmin(ctx context.Context) error {
 	}
 	now := time.Now().UTC()
 	_, err = s.db.ExecContext(ctx, `
-		insert into admin_users (username, password_hash, enabled, created_at, updated_at)
-		values (?, ?, true, ?, ?)
-	`, username, string(hash), now, now)
+		insert into admin_users (username,username_key,password_hash,enabled,created_at,updated_at)
+        values (?,account_key(?),?,true,?,?)
+	`, username, username, string(hash), now, now)
 	return err
 }
 
@@ -153,7 +154,7 @@ func (s *Service) MatchesAstrBotKey(ctx context.Context, apiKey string) bool {
 		return false
 	}
 	var stored sql.NullString
-	if err := s.db.QueryRowContext(ctx, `select astrbot_api_key from sync_config where id = 1`).Scan(&stored); err != nil {
+	if err := s.db.QueryRowContext(ctx, `select astrbot_api_key from sharing_settings where id = 1`).Scan(&stored); err != nil {
 		return false
 	}
 	return stored.Valid && strings.TrimSpace(stored.String) != "" && subtle.ConstantTimeCompare([]byte(strings.TrimSpace(stored.String)), []byte(apiKey)) == 1
@@ -164,7 +165,7 @@ func (s *Service) findUserByUsername(ctx context.Context, username string) (user
 	err := s.db.QueryRowContext(ctx, `
 		select id, username, password_hash, enabled
 		from admin_users
-		where lower(username) = lower(?)
+		where username_key = account_key(?)
 	`, username).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Enabled)
 	return u, err
 }

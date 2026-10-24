@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"player-stats-backend-go/internal/storage"
 	"strings"
 	"time"
 
@@ -12,11 +13,11 @@ import (
 )
 
 type Service struct {
-	db  *sql.DB
+	db  *storage.DB
 	cfg config.Config
 }
 
-func NewService(db *sql.DB, cfg config.Config) *Service {
+func NewService(db *storage.DB, cfg config.Config) *Service {
 	return &Service{db: db, cfg: cfg}
 }
 
@@ -116,7 +117,7 @@ type PlayerServerStatsResponse struct {
 func (s *Service) Overview(ctx context.Context, serverID string, from, to *time.Time) (OverviewResponse, error) {
 	serverID = normalizeServerID(serverID)
 	where, args := dailyWhere(serverID, from, to, "")
-	query := `select count(distinct player_name), coalesce(sum(broken_count), 0), coalesce(sum(placed_count), 0) from player_server_daily_stats` + where
+	query := `select count(distinct player_name), coalesce(sum(broken_count), 0), coalesce(sum(placed_count), 0) from v_daily_stats` + where
 	var response OverviewResponse
 	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&response.PlayerCount, &response.BrokenCount, &response.PlacedCount); err != nil {
 		return response, err
@@ -132,27 +133,32 @@ func (s *Service) Players(ctx context.Context, serverID string, from, to *time.T
 	limit = clamp(limit, 1, 200)
 	where, args := dailyWhere(serverID, from, to, strings.TrimSpace(player))
 	args = append(args, limit)
-	rows, err := s.db.QueryContext(ctx, `
-		select player_name, coalesce(sum(broken_count), 0), coalesce(sum(placed_count), 0)
-		from player_server_daily_stats`+where+`
-		group by player_name
-		order by (coalesce(sum(broken_count), 0) + coalesce(sum(placed_count), 0)) desc
-		limit ?`, args...)
-	if err != nil {
-		return nil, err
+	profileFilter := ""
+	if serverID != "" {
+		profileFilter = " and p.server_id=?"
+		args = append(args, serverID)
+	}
+	query := `with ranked as (select player_name,sum(broken_count) as broken_count,sum(placed_count) as placed_count from v_daily_stats` + where + ` group by player_name order by sum(broken_count)+sum(placed_count) desc,player_name limit ?) select r.player_name,r.broken_count,r.placed_count,(select min(p.first_seen_at) from v_profiles p where p.player_key=account_key(r.player_name)` + profileFilter + `) from ranked r order by r.broken_count+r.placed_count desc,r.player_name`
+	rows, e := s.db.QueryContext(ctx, query, args...)
+	if e != nil {
+		return nil, e
 	}
 	defer rows.Close()
-	result := make([]PlayerSummary, 0)
+	out := []PlayerSummary{}
 	for rows.Next() {
-		var item PlayerSummary
-		if err := rows.Scan(&item.PlayerName, &item.BrokenCount, &item.PlacedCount); err != nil {
-			return nil, err
+		var v PlayerSummary
+		var first sql.NullTime
+		if e := rows.Scan(&v.PlayerName, &v.BrokenCount, &v.PlacedCount, &first); e != nil {
+			return nil, e
 		}
-		item.TotalCount = item.BrokenCount + item.PlacedCount
-		item.FirstSeenAt = s.firstSeen(ctx, serverID, item.PlayerName)
-		result = append(result, item)
+		v.TotalCount = v.BrokenCount + v.PlacedCount
+		if first.Valid {
+			t := apitype.NewLocalDateTime(first.Time)
+			v.FirstSeenAt = &t
+		}
+		out = append(out, v)
 	}
-	return result, rows.Err()
+	return out, rows.Err()
 }
 
 func (s *Service) Player(ctx context.Context, serverID, playerName string, from, to *time.Time) (PlayerStatsResponse, bool, error) {
@@ -175,8 +181,8 @@ func (s *Service) PlayerPresence(ctx context.Context, serverID, playerName strin
 	serverID = normalizeServerID(serverID)
 	query := `
 		select server_id, server_name, player_name, first_seen_at
-		from player_server_profiles
-		where player_name = ?`
+		from v_profiles
+		where player_key=account_key(?)`
 	args := []any{playerName}
 	if serverID != "" {
 		query += ` and server_id = ?`
@@ -218,7 +224,7 @@ func (s *Service) Daily(ctx context.Context, serverID string, from, to *time.Tim
 	where, args := dailyWhere(serverID, from, to, strings.TrimSpace(player))
 	rows, err := s.db.QueryContext(ctx, `
 		select stat_date, coalesce(sum(broken_count), 0), coalesce(sum(placed_count), 0)
-		from player_server_daily_stats`+where+`
+		from v_daily_stats`+where+`
 		group by stat_date
 		order by stat_date`, args...)
 	if err != nil {
@@ -243,7 +249,7 @@ func (s *Service) Servers(ctx context.Context, from, to *time.Time) ([]ServerSum
 	where, args := dailyWhere("", from, to, "")
 	rows, err := s.db.QueryContext(ctx, `
 		select server_id, server_name, count(distinct player_name), coalesce(sum(broken_count), 0), coalesce(sum(placed_count), 0)
-		from player_server_daily_stats`+where+`
+		from v_daily_stats`+where+`
 		group by server_id, server_name
 		order by server_id`, args...)
 	if err != nil {
@@ -263,12 +269,22 @@ func (s *Service) Servers(ctx context.Context, from, to *time.Time) ([]ServerSum
 }
 
 func (s *Service) ServerOptions() []ServerOption {
-	sources := s.cfg.Sources()
-	result := make([]ServerOption, 0, len(sources))
-	for _, source := range sources {
-		result = append(result, ServerOption{ServerID: source.ID, ServerName: source.Name})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	rows, e := s.db.QueryContext(ctx, `select source_id,source_name from log_sources where kind='csv' order by source_id`)
+	if e != nil {
+		return []ServerOption{}
 	}
-	return result
+	defer rows.Close()
+	out := []ServerOption{}
+	for rows.Next() {
+		var v ServerOption
+		if e := rows.Scan(&v.ServerID, &v.ServerName); e != nil {
+			return []ServerOption{}
+		}
+		out = append(out, v)
+	}
+	return out
 }
 
 func (s *Service) ImportedFiles(ctx context.Context, serverID string, limit int) ([]ImportedServerLogFileView, error) {
@@ -276,7 +292,7 @@ func (s *Service) ImportedFiles(ctx context.Context, serverID string, limit int)
 	limit = clamp(limit, 1, 200)
 	query := `
 		select id, server_id, server_name, remote_path, file_name, log_date, file_size, last_modified, content_hash, imported_at, row_count, ignored_count
-		from imported_server_log_files`
+		from v_import_files`
 	args := []any{}
 	if serverID != "" {
 		query += ` where server_id = ?`
@@ -413,7 +429,7 @@ func (s *Service) exactPlayerSummary(ctx context.Context, serverID, playerName s
 	var summary PlayerSummary
 	err := s.db.QueryRowContext(ctx, `
 		select player_name, coalesce(sum(broken_count), 0), coalesce(sum(placed_count), 0)
-		from player_server_daily_stats`+where+`
+		from v_daily_stats`+where+`
 		group by player_name
 		limit 1`, args...).Scan(&summary.PlayerName, &summary.BrokenCount, &summary.PlacedCount)
 	if err == sql.ErrNoRows {
@@ -430,7 +446,7 @@ func (s *Service) exactPlayerSummaryByServer(ctx context.Context, playerName str
 	where, args := dailyExactWhere("", playerName, from, to)
 	rows, err := s.db.QueryContext(ctx, `
 		select server_id, player_name, coalesce(sum(broken_count), 0), coalesce(sum(placed_count), 0)
-		from player_server_daily_stats`+where+`
+		from v_daily_stats`+where+`
 		group by server_id, server_name, player_name
 		order by server_id`, args...)
 	if err != nil {
@@ -458,7 +474,7 @@ type profileSummary struct {
 func (s *Service) profilesByServer(ctx context.Context, playerName string) (map[string]profileSummary, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		select server_id, player_name, first_seen_at
-		from player_server_profiles
+		from v_profiles
 		where lower(player_name) = lower(?)
 		order by server_id`, playerName)
 	if err != nil {
@@ -481,7 +497,7 @@ func (s *Service) profilesByServer(ctx context.Context, playerName string) (map[
 }
 
 func (s *Service) firstSeen(ctx context.Context, serverID, playerName string) *apitype.LocalDateTime {
-	query := `select min(first_seen_at) from player_server_profiles where lower(player_name) = lower(?)`
+	query := `select min(first_seen_at) from v_profiles where lower(player_name) = lower(?)`
 	args := []any{playerName}
 	if serverID != "" {
 		query += ` and server_id = ?`
@@ -499,7 +515,7 @@ func (s *Service) profilePlayerName(ctx context.Context, serverID, playerName st
 	var value string
 	err := s.db.QueryRowContext(ctx, `
 		select player_name
-		from player_server_profiles
+		from v_profiles
 		where server_id = ? and lower(player_name) = lower(?)
 		limit 1`, serverID, playerName).Scan(&value)
 	if err != nil {
@@ -510,7 +526,7 @@ func (s *Service) profilePlayerName(ctx context.Context, serverID, playerName st
 
 func (s *Service) dataFreshness(ctx context.Context, serverID string) (*apitype.Date, *time.Time) {
 	var latestFileDate sql.NullTime
-	query := `select max(log_date) from imported_server_log_files`
+	query := `select max(log_date) from v_import_files`
 	args := []any{}
 	if serverID != "" {
 		query += ` where server_id = ?`
@@ -519,7 +535,7 @@ func (s *Service) dataFreshness(ctx context.Context, serverID string) (*apitype.
 	_ = s.db.QueryRowContext(ctx, query, args...).Scan(&latestFileDate)
 
 	var latestSeen sql.NullTime
-	query = `select max(first_seen_at) from player_server_profiles`
+	query = `select max(first_seen_at) from v_profiles`
 	args = []any{}
 	if serverID != "" {
 		query += ` where server_id = ?`
@@ -542,7 +558,7 @@ func (s *Service) dataFreshness(ctx context.Context, serverID string) (*apitype.
 }
 
 func (s *Service) importedFileCount(ctx context.Context, serverID string) int64 {
-	query := `select count(*) from imported_server_log_files`
+	query := `select count(*) from v_import_files`
 	args := []any{}
 	if serverID != "" {
 		query += ` where server_id = ?`
@@ -554,7 +570,7 @@ func (s *Service) importedFileCount(ctx context.Context, serverID string) int64 
 }
 
 func (s *Service) latestImportedAt(ctx context.Context, serverID string) *time.Time {
-	query := `select max(imported_at) from imported_server_log_files`
+	query := `select max(imported_at) from v_import_files`
 	args := []any{}
 	if serverID != "" {
 		query += ` where server_id = ?`
@@ -576,11 +592,11 @@ func dailyWhere(serverID string, from, to *time.Time, player string) (string, []
 	}
 	if from != nil {
 		clauses = append(clauses, "stat_date >= ?")
-		args = append(args, *from)
+		args = append(args, storage.Date(*from))
 	}
 	if to != nil {
 		clauses = append(clauses, "stat_date <= ?")
-		args = append(args, *to)
+		args = append(args, storage.Date(*to))
 	}
 	if player != "" {
 		clauses = append(clauses, "lower(player_name) like lower(?)")

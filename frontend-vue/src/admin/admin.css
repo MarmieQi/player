@@ -89,7 +89,6 @@
 .admin-workspace .primary-button, .admin-workspace .secondary-button { font-weight: 500; font-size: 14px; }
 .admin-workspace :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea) { min-width: 0; max-width: 100%; border-color: #d9e2eb; border-radius: 7px; color: #34485e; }
 .admin-workspace .settings-form label, .admin-workspace .settings-form label > span { color: #46556a; }
-.admin-workspace .admin-settings-actions { display: flex; justify-content: flex-end; align-items: center; gap: 12px; }
 .admin-workspace .settings-form { padding: 8px 0; }
 .admin-workspace .settings-form label, .admin-workspace .log-query-form label { font-size: 13px; font-weight: 500; color: #46556a; }
 .admin-workspace .settings-form input, .admin-workspace .log-query-form input, .admin-workspace .settings-form select { font-size: 14px; font-weight: 400; }
@@ -119,34 +118,6 @@
 .admin-workspace .password-field .password-toggle { position: static; width: 40px; height: 38px; min-height: 38px; padding: 0; border: 0; border-radius: 0; background: transparent; color: #8291a4; box-shadow: none; }
 .admin-workspace .password-field .password-toggle:hover { background: var(--admin-accent-soft); color: var(--admin-accent); }
 .admin-workspace .password-field .password-toggle:focus-visible { outline-offset: -4px; }
-.admin-workspace .auto-task-list { display: grid; gap: 12px; }
-.admin-workspace .auto-task-row { grid-template-columns: minmax(90px, .5fr) repeat(2, minmax(0, 1fr)); gap: 16px; padding: 16px; border-radius: 10px; background: #f8fafc; }
-.admin-workspace .auto-task-server { gap: 5px; }
-.admin-workspace .auto-task-server strong { color: #34465d; font-size: 14px; }
-.admin-workspace .auto-task-server > span { color: #8a98a9; font-size: 11px; font-weight: 400; }
-.admin-workspace .admin-schedule-control { display: grid; grid-template-columns: minmax(0, 1fr) 112px; gap: 12px; align-items: center; min-width: 0; padding: 12px; border: 1px solid #e6ecf2; border-radius: 9px; background: #fff; }
-.admin-workspace .admin-schedule-control.is-enabled { border-color: var(--admin-accent-border); }
-.admin-workspace .admin-schedule-toggle { justify-content: flex-start; gap: 8px; min-width: 0; padding: 0; border: 0; background: transparent; box-shadow: none; font-size: 13px; white-space: normal; text-align: left; }
-.admin-workspace .admin-schedule-toggle input[type="checkbox"] { appearance: none; position: relative; flex: 0 0 32px; width: 32px; height: 18px; min-height: 18px; margin: 0; padding: 0; border: 0; border-radius: 20px; background: #c9d3df; cursor: pointer; }
-.admin-workspace .admin-schedule-toggle input[type="checkbox"]::before { content: ''; display: block; width: 14px; height: 14px; margin: 2px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px #24344820; }
-.admin-workspace .admin-schedule-toggle input:checked { background: var(--admin-accent); }
-.admin-workspace .admin-schedule-toggle input:checked::before { transform: translateX(14px); }
-.admin-workspace .admin-schedule-control .time-field { gap: 6px; }
-.admin-workspace .admin-schedule-control .time-field > span { color: #7b899b; font-size: 12px; font-weight: 500; }
-.admin-workspace .admin-schedule-control input[type="time"] { min-height: 36px; padding: 6px 9px; background: #fff; font-size: 13px; font-variant-numeric: tabular-nums; }
-.admin-workspace .admin-schedule-control input[type="time"]:disabled { color: #8c9aab; background: #f4f6f9; border-color: #e7ecf2; cursor: not-allowed; }
-@media (min-width: 768px) and (max-width: 1100px) {
-  .admin-workspace .auto-task-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .admin-workspace .auto-task-server { grid-column: 1 / -1; }
-  .admin-workspace .admin-schedule-control { grid-template-columns: minmax(0, 1fr); }
-}
-@media (max-width: 767px) {
-  .admin-workspace .auto-task-row { grid-template-columns: minmax(0, 1fr); padding: 14px; gap: 12px; }
-}
-@media (max-width: 420px) {
-  .admin-workspace .admin-schedule-control { grid-template-columns: minmax(0, 1fr); gap: 8px; }
-  .admin-workspace .admin-schedule-control .time-field { grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 12px; }
-}
 .admin-workspace input[type="checkbox"], .admin-workspace input[type="radio"] { accent-color: var(--admin-accent); }
 .admin-workspace .settings-form input:focus { border-color: var(--admin-accent); box-shadow: 0 0 0 2px var(--admin-accent-shadow); }
 .admin-workspace .rank-bar i { background: var(--admin-accent); }

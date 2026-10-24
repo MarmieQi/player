@@ -3,50 +3,15 @@
 # 日常更新保留 .env 和 docker-data，只更新应用镜像。
 
 services:
-  mysql:
-    image: mysql:8.4
-    container_name: player-stats-mysql
-    restart: always
-    environment:
-      TZ: Asia/Shanghai
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-player_stats}
-      MYSQL_USER: ${MYSQL_USER:-player_stats}
-      # 建议修改：数据库普通用户密码。已有 docker-data/mysql 时，改这里不会自动改旧库密码。
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?请在 .env 中填写 MYSQL_PASSWORD}
-      # 建议修改：数据库 root 密码。已有 docker-data/mysql 时，改这里不会自动改旧库密码。
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请在 .env 中填写 MYSQL_ROOT_PASSWORD}
-    command:
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
-      - --default-time-zone=+08:00
-    volumes:
-      - type: bind
-        source: ${DATA_DIRECTORY:-./docker-data}/mysql
-        target: /var/lib/mysql
-        bind:
-          create_host_path: true
-    healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$${MYSQL_ROOT_PASSWORD}\" --silent"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-      start_period: 30s
-
   backend:
     image: ghcr.io/marmieqi/player-backend:${IMAGE_TAG:-latest}
     container_name: player-stats-backend
     restart: always
-    depends_on:
-      mysql:
-        condition: service_healthy
     environment:
       TZ: Asia/Shanghai
       SERVER_PORT: 8080
 
-      PLAYER_STATS_DATASOURCE_URL: jdbc:mysql://mysql:3306/${MYSQL_DATABASE:-player_stats}
-      PLAYER_STATS_DATASOURCE_USERNAME: ${MYSQL_USER:-player_stats}
-      # 必须和 mysql 服务里的 MYSQL_PASSWORD 保持一致。
-      PLAYER_STATS_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD:?请在 .env 中填写 MYSQL_PASSWORD}
+      PLAYER_DATABASE_PATH: /data/database/player.db
 
       APP_ADMIN_USERNAME: ${APP_ADMIN_USERNAME:-admin}
       # 建议修改：后台管理员初始密码。账号已创建后，改这里不会覆盖旧密码。
@@ -56,7 +21,6 @@ services:
       APP_ADMIN_TOKEN_TTL_DAYS: ${APP_ADMIN_TOKEN_TTL_DAYS:-7}
 
       PLAYER_LOGS_ZONE_ID: Asia/Shanghai
-      PLAYER_LOGS_IMPORTER_MAX_FILES_PER_RUN: ${PLAYER_LOGS_IMPORTER_MAX_FILES_PER_RUN:-1000}
       PLAYER_LOGS_ARCHIVE_DIRECTORY: /data/synced-logs
 
       PLAYER_LOGS_MAIN_DIRECTORY: ${PLAYER_LOGS_MAIN_DIRECTORY:-/data/synced-logs/main}
@@ -71,12 +35,15 @@ services:
       PLAYER_LOGS_XRAY_TEMP_DIRECTORY: /data/temp/xray
       # 当天日志只读查询快照。不会进入正式归档，默认复用 120 秒并自动清理。
       PLAYER_LOGS_LIVE_TEMP_DIRECTORY: ${PLAYER_LOGS_LIVE_TEMP_DIRECTORY:-/data/temp/live-log-query}
-      PLAYER_LOGS_LIVE_CACHE_SECONDS: ${PLAYER_LOGS_LIVE_CACHE_SECONDS:-120}
-      PLAYER_LOGS_XRAY_ANALYSIS_RETAINED_JOBS: ${PLAYER_LOGS_XRAY_ANALYSIS_RETAINED_JOBS:-1}
       APP_CORS_ALLOWED_ORIGINS: ${APP_CORS_ALLOWED_ORIGINS:-http://localhost:5173}
       APP_CORS_ALLOWED_ORIGIN_PATTERNS: ${APP_CORS_ALLOWED_ORIGIN_PATTERNS:-http://localhost:*,http://127.0.0.1:*,http://10.*:*,http://172.*:*,http://192.168.*:*}
 
     volumes:
+      - type: bind
+        source: ${DATA_DIRECTORY:-./docker-data}/database
+        target: /data/database
+        bind:
+          create_host_path: true
       - type: bind
         source: ${DATA_DIRECTORY:-./docker-data}/synced-logs
         target: /data/synced-logs
@@ -87,6 +54,11 @@ services:
         target: /data/temp
         bind:
           create_host_path: true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
     expose:
       - "8080"
 
@@ -95,7 +67,8 @@ services:
     container_name: player-stats-frontend
     restart: always
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
       - "${PUBLIC_PORT:-9493}:80"
       - "${ADMIN_PORT:-8843}:8081"

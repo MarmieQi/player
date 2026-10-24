@@ -80,7 +80,8 @@ export async function apiDelete(path, params = {}, options = {}) {
     method: 'DELETE',
     headers: authHeaders({
       Accept: 'application/json'
-    }, options)
+    }, options),
+    signal: options.signal
   })
   return parseResponse(response)
 }

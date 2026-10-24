@@ -55,6 +55,8 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) routes() {
+	s.mux.HandleFunc("GET /api/admin/settings/{section}", s.settingsSection)
+	s.mux.HandleFunc("PUT /api/admin/settings/{section}", s.settingsSection)
 	s.mux.HandleFunc("POST /api/admin/group-chat/query", s.queryGroupChat)
 	s.mux.HandleFunc("GET /api/admin/group-chat/query/{snapshotId}", s.groupChatQueryPage)
 	s.mux.HandleFunc("GET /api/admin/group-chat/copy-schedule", s.groupChatSchedule)

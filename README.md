@@ -1,8 +1,10 @@
 # 玩家日志统计
 
-基岩版 Minecraft 玩家日志统计工具。项目读取 PlayerLogger 生成的 CSV，支持本地目录或 SMB 远程复制，导入 MySQL 后提供玩家统计、矿物统计、日志查询、矿透分析、分享页面和 AstrBot 插件接口。
+基岩版 Minecraft 玩家日志统计工具。项目读取 PlayerLogger 生成的 CSV，支持本地目录或 SMB 远程复制，导入本地 SQLite 后提供玩家统计、矿物统计、日志查询、矿透分析、分享页面和 AstrBot 插件接口。
 
 当前后端是 Go：`backend-go`。前端目录是 Vue 3：`frontend-vue`。
+
+> 本版运行时只使用 SQLite。已有 MySQL 服务器先按 [迁移指南](SQLITE-MIGRATION.md) 操作，不要直接切换镜像。
 
 ## Docker 部署
 
@@ -26,7 +28,7 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-编辑 `.env`，填写 `MYSQL_PASSWORD`、`MYSQL_ROOT_PASSWORD`、`APP_ADMIN_PASSWORD`、`APP_ADMIN_JWT_SECRET` 四个必填项，再执行：
+编辑 `.env`，填写 `APP_ADMIN_PASSWORD`、`APP_ADMIN_JWT_SECRET` 两个必填项，再执行：
 
 ```bash
 docker compose config --quiet &&
@@ -37,7 +39,7 @@ docker compose ps
 docker compose logs --tail=100 backend frontend
 ```
 
-`config --quiet` 只校验，不打印展开后的密码。Compose 会自动读取同目录 `.env`；同名 shell 环境变量优先于文件，排查时注意已有的导出变量。密码含 `$`、`#`、空格时在 `.env` 使用英文单引号，例如 `MYSQL_PASSWORD='你自己的密码'`。
+`config --quiet` 只校验，不打印展开后的密码。Compose 会自动读取同目录 `.env`；同名 shell 环境变量优先于文件，排查时注意已有的导出变量。密码含 `$`、`#`、空格时在 `.env` 使用英文单引号，例如 `APP_ADMIN_PASSWORD='你自己的密码'`。
 
 默认公开端口为 `9493`，后台端口为 `8843`，初始管理员名为 `admin`。密码由你填写，没有可直接用于生产的内置部署密码。已有管理员不会因修改初始密码而被覆盖，后续在后台“个人中心”修改密码。
 
@@ -47,7 +49,7 @@ docker compose logs --tail=100 backend frontend
 
 ## 更新部署
 
-先确认本次 GitHub Actions 的前后端镜像均已发布成功。日常更新保留现有 `.env` 和 `docker-compose.yml`，只拉取应用镜像，不顺带更新 MySQL：
+先确认本次 GitHub Actions 的前后端镜像均已发布成功。日常更新保留现有 `.env` 和 `docker-compose.yml`，只拉取应用镜像：
 
 ```bash
 cd /vol1/1000/docker/player
@@ -61,7 +63,7 @@ docker compose logs --tail=100 backend frontend
 
 `.env` 的 `IMAGE_TAG` 同时控制前后端版本，默认 `latest`。需要配套部署或回滚时，填写同一次成功构建的完整提交 SHA；回滚应用前另行确认数据库迁移兼容性，不能仅靠切换镜像恢复数据库。
 
-只有服务结构发生变化时才更新 Compose：先下载为 `docker-compose.yml.new`，对照并保留本地定制，备份原文件后再替换；不要重复复制模板覆盖 `.env`。clone 部署先确认本地配置已迁出 Compose，再拉取代码。MySQL 镜像更新单独安排并先备份数据库。
+只有服务结构发生变化时才更新 Compose：先下载为 `docker-compose.yml.new`，对照并保留本地定制，备份原文件后再替换；不要重复复制模板覆盖 `.env`。clone 部署先确认本地配置已迁出 Compose，再拉取代码。旧 MySQL 部署不能直接套用本节，必须先完成 [SQLite 配置迁移](SQLITE-MIGRATION.md)。
 
 ## 配置维护
 
@@ -71,7 +73,7 @@ docker compose logs --tail=100 backend frontend
 
 保留当前 `.env` 的密码、JWT 密钥、端口、镜像标签与数据路径，升级时不要重新复制模板。启动参数修改后通过 `docker compose up -d` 重建对应容器生效；直接运行 Go 后端仍读取进程环境变量。
 
-`docker-data/` 或 `DATA_DIRECTORY` 指向的目录是持久化数据，不能删除。备份需包含服务器 `.env` 和数据库、CSV；MySQL 数据应通过数据库备份或停库后的一致性备份保存，不能直接热拷贝正在写入的数据目录。
+`docker-data/` 或 `DATA_DIRECTORY` 指向的目录是持久化数据，不能删除。备份需包含服务器 `.env` 和数据库、CSV；SQLite 使用 WAL，不能在运行时只复制主 `.db` 文件而遗漏尚未检查点的数据。
 
 ## CSV 目录
 
@@ -80,7 +82,8 @@ Docker 会把宿主机目录挂载到容器：
 ```text
 ./docker-data/synced-logs/main  -> 主服 CSV
 ./docker-data/synced-logs/sub   -> 2服 CSV
-./docker-data/mysql             -> MySQL 数据
+./docker-data/database          -> SQLite 数据库与 WAL/SHM（整个目录挂载）
+./docker-data/synced-logs/chat   -> 群服聊天 TXT
 ./docker-data/temp              -> 矿透分析及当天日志查询临时文件（自动清理）
 ```
 
@@ -94,11 +97,11 @@ player_actions_2026-05-02.csv
 
 ## SMB 同步与业务设置
 
-SMB 地址、账号、共享名、各日志源目录、自动复制/解析时间和分享有效期，在后台“系统设置”中修改，保存到 MySQL。已有部署以后台数据库记录为准，重建容器不会用 `.env` 覆盖这些值。
+SMB 地址、账号、共享名、各日志源目录、自动复制/解析时间和分享有效期，在后台“系统设置”中修改，保存到 SQLite。已有部署以后台数据库记录为准，重建容器不会用 `.env` 覆盖这些值。
 
 SMB 连接和日志源只由后台管理；是否自动复制、解析由每个服务器的任务开关控制。新数据库的 SMB 连接初始为空，需要在后台填写；已有数据库记录保持不变。管理员密码在“个人中心”修改，AstrBot 密钥在后台生成或重置。
 
-SMB 复制先把远程 CSV 拉到本地归档目录，再从本地解析入库。正式同步默认跳过当天文件；当天日志查询使用短期只读快照。缓存秒数等启动参数见 `.env.example` 高级分组。
+SMB 复制先把远程 CSV 拉到本地归档目录，再从本地解析入库。正式同步默认跳过当天文件；当天日志查询使用短期只读快照。缓存秒数、单轮处理上限和分析保留数量在“运行参数”中设置，保存后重启后端生效。
 
 ## 本地开发
 

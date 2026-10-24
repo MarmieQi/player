@@ -2,14 +2,13 @@ package importer
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"player-stats-backend-go/internal/storage"
 	"regexp"
 	"sort"
 	"strings"
@@ -22,7 +21,7 @@ import (
 )
 
 type Service struct {
-	db            *sql.DB
+	db            *storage.DB
 	cfg           config.Config
 	settings      *settings.Service
 	parser        parser
@@ -35,7 +34,7 @@ type ProgressListener interface {
 	FileFinished(result FileImportResult)
 }
 
-func NewService(db *sql.DB, cfg config.Config, settingsService *settings.Service) *Service {
+func NewService(db *storage.DB, cfg config.Config, settingsService *settings.Service) *Service {
 	return &Service{
 		db:            db,
 		cfg:           cfg,
@@ -93,7 +92,20 @@ func (s *Service) ImportFromConfiguredSource(ctx context.Context, requestedServe
 			files = appendResult(files, listener, failedResult(source.ID, source.Name, source.Directory, err.Error()))
 			continue
 		}
-		for _, file := range limitFiles(localFiles, s.cfg.MaxFilesPerRun) {
+		processed := 0
+		for _, file := range localFiles {
+			status, e := s.importFileStatus(ctx, source, file, skipToday)
+			if e != nil {
+				release()
+				return summarizeRun(startedAt, files), e
+			}
+			if status.Status == "IMPORTED" || status.Status == "SKIPPED_TODAY" {
+				continue
+			}
+			if s.cfg.MaxFilesPerRun > 0 && processed >= s.cfg.MaxFilesPerRun {
+				break
+			}
+			processed++
 			if err := ctx.Err(); err != nil {
 				release()
 				return summarizeRun(startedAt, files), err
@@ -124,9 +136,6 @@ func (s *Service) DeleteImportRecord(ctx context.Context, serverID, remotePath s
 	if err != nil {
 		return DeleteImportRecordResult{}, err
 	}
-	if err := s.syncProfiles(ctx, tx, deleted.serverID, deleted.serverName, deleted.affectedPlayers); err != nil {
-		return DeleteImportRecordResult{}, err
-	}
 	if err := tx.Commit(); err != nil {
 		return DeleteImportRecordResult{}, err
 	}
@@ -144,46 +153,39 @@ func (s *Service) DeleteImportRecords(ctx context.Context, request DeleteImportR
 	defer rollbackQuietly(tx)
 
 	results := make([]DeleteImportRecordResult, 0, len(request.Files))
-	profiles := map[profileSyncKey]map[string]struct{}{}
 	for _, file := range request.Files {
+		if _, err := tx.ExecContext(ctx, `savepoint delete_file`); err != nil {
+			return []DeleteImportRecordResult{{Message: err.Error()}}
+		}
 		deleted, err := s.deleteImportRecordTx(ctx, tx, file.ServerID, file.RemotePath)
 		if err != nil {
+			if _, e := tx.ExecContext(ctx, `rollback to delete_file`); e != nil {
+				return []DeleteImportRecordResult{{Message: e.Error()}}
+			}
+			_, _ = tx.ExecContext(ctx, `release delete_file`)
 			results = append(results, DeleteImportRecordResult{ServerID: file.ServerID, RemotePath: file.RemotePath, Deleted: false, Message: err.Error()})
 			continue
 		}
+		if _, e := tx.ExecContext(ctx, `release delete_file`); e != nil {
+			return []DeleteImportRecordResult{{Message: e.Error()}}
+		}
 		results = append(results, deleted.result)
-		key := profileSyncKey{serverID: deleted.serverID, serverName: deleted.serverName}
-		if profiles[key] == nil {
-			profiles[key] = map[string]struct{}{}
-		}
-		for playerName := range deleted.affectedPlayers {
-			profiles[key][playerName] = struct{}{}
-		}
-	}
-	for key, playerNames := range profiles {
-		if err := s.syncProfiles(ctx, tx, key.serverID, key.serverName, playerNames); err != nil {
-			return append(results, DeleteImportRecordResult{Deleted: false, Message: err.Error()})
-		}
 	}
 	if err := tx.Commit(); err != nil {
-		return append(results, DeleteImportRecordResult{Deleted: false, Message: err.Error()})
+		for i := range results {
+			results[i].Deleted = false
+			results[i].Message = "事务回滚：" + err.Error()
+		}
+		return results
 	}
 	return results
 }
 
 type deletedImportRecord struct {
-	result          DeleteImportRecordResult
-	serverID        string
-	serverName      string
-	affectedPlayers map[string]struct{}
+	result DeleteImportRecordResult
 }
 
-type profileSyncKey struct {
-	serverID   string
-	serverName string
-}
-
-func (s *Service) deleteImportRecordTx(ctx context.Context, tx *sql.Tx, serverID, remotePath string) (deletedImportRecord, error) {
+func (s *Service) deleteImportRecordTx(ctx context.Context, tx *storage.Tx, serverID, remotePath string) (deletedImportRecord, error) {
 	serverID = strings.TrimSpace(serverID)
 	remotePath = strings.TrimSpace(remotePath)
 	if serverID == "" || remotePath == "" {
@@ -196,28 +198,18 @@ func (s *Service) deleteImportRecordTx(ctx context.Context, tx *sql.Tx, serverID
 	if !found {
 		return deletedImportRecord{}, auth.NewHTTPError(404, "Import record not found")
 	}
-	previous, err := loadFileStats(ctx, tx, record.id)
-	if err != nil {
-		return deletedImportRecord{}, err
-	}
 	affectedPlayers, err := loadFileSeenPlayers(ctx, tx, record.id)
 	if err != nil {
 		return deletedImportRecord{}, err
 	}
-	if err := subtractDeltas(ctx, tx, record.serverID, record.serverName, previous); err != nil {
+	if _, err := tx.ExecContext(ctx, `delete from import_files where id=?`, record.id); err != nil {
 		return deletedImportRecord{}, err
 	}
-	if err := deleteFileDetails(ctx, tx, record.id); err != nil {
-		return deletedImportRecord{}, err
-	}
-	if _, err := tx.ExecContext(ctx, `delete from imported_server_log_files where id = ?`, record.id); err != nil {
+	if err := s.syncProfiles(ctx, tx, record.serverID, record.serverName, affectedPlayers); err != nil {
 		return deletedImportRecord{}, err
 	}
 	return deletedImportRecord{
-		result:          DeleteImportRecordResult{ServerID: serverID, RemotePath: remotePath, Deleted: true, Message: "Import record deleted"},
-		serverID:        record.serverID,
-		serverName:      record.serverName,
-		affectedPlayers: affectedPlayers,
+		result: DeleteImportRecordResult{ServerID: serverID, RemotePath: remotePath, Deleted: true, Message: "Import record deleted"},
 	}, nil
 }
 
@@ -300,7 +292,8 @@ func (s *Service) LatestAutoTaskLogs(ctx context.Context, limit int) ([]AutoTask
 		select id, created_at, coalesce(server_id, ''), coalesce(server_name, ''), coalesce(task_type, ''),
 		       coalesce(task_label, ''), coalesce(status, ''), coalesce(message, ''), coalesce(file_details, ''),
 		       scanned_files, success_files, skipped_files, failed_files
-		from auto_task_logs
+		from task_runs
+        where hidden=0
 		order by created_at desc
 		limit ?
 	`, limit)
@@ -323,7 +316,7 @@ func (s *Service) LatestAutoTaskLogs(ctx context.Context, limit int) ([]AutoTask
 }
 
 func (s *Service) ClearAutoTaskLogs(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `delete from auto_task_logs`)
+	_, err := s.db.ExecContext(ctx, `update task_runs set hidden=1 where status<>'RUNNING'`)
 	return err
 }
 
@@ -361,49 +354,37 @@ func (s *Service) importOne(ctx context.Context, source config.Source, file Remo
 }
 
 func (s *Service) applyImport(ctx context.Context, source config.Source, file RemoteLogFile, logDate *time.Time, parsed parsedLogFile) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer rollbackQuietly(tx)
-
-	existing, found, err := findImportFileTx(ctx, tx, source.ID, file.Path)
-	if err != nil {
-		return err
-	}
-	previousStats := map[statKey]actionCounts{}
-	affectedPlayers := map[string]struct{}{}
-	if found {
-		previousStats, err = loadFileStats(ctx, tx, existing.id)
-		if err != nil {
-			return err
+	return s.db.Write(ctx, func(tx *storage.Tx) error {
+		record, found, e := findImportFileTx(ctx, tx, source.ID, file.Path)
+		if e != nil {
+			return e
 		}
-		affectedPlayers, err = loadFileSeenPlayers(ctx, tx, existing.id)
-		if err != nil {
-			return err
+		if found && record.contentHash == parsed.contentHash && record.parserVersion == parserVersion {
+			_, e := tx.ExecContext(ctx, `update import_files set file_size=?,last_modified=? where id=?`, file.Size, file.LastModified, record.id)
+			return e
 		}
-	}
-	for player := range parsed.firstSeenByPlayer {
-		affectedPlayers[player] = struct{}{}
-	}
-
-	importFileID, err := upsertImportFile(ctx, tx, existing.id, source, file, logDate, parsed)
-	if err != nil {
-		return err
-	}
-	if err := applyDeltas(ctx, tx, source.ID, source.Name, previousStats, parsed.stats); err != nil {
-		return err
-	}
-	if err := deleteFileDetails(ctx, tx, importFileID); err != nil {
-		return err
-	}
-	if err := insertParsedDetails(ctx, tx, importFileID, parsed); err != nil {
-		return err
-	}
-	if err := s.syncProfiles(ctx, tx, source.ID, source.Name, affectedPlayers); err != nil {
-		return err
-	}
-	return tx.Commit()
+		affected := map[string]struct{}{}
+		if found {
+			affected, e = loadFileSeenPlayers(ctx, tx, record.id)
+			if e != nil {
+				return e
+			}
+		}
+		for name := range parsed.firstSeenByPlayer {
+			affected[name] = struct{}{}
+		}
+		id, e := upsertImportFile(ctx, tx, record.id, source, file, logDate, parsed)
+		if e != nil {
+			return e
+		}
+		if e = deleteFileDetails(ctx, tx, id); e != nil {
+			return e
+		}
+		if e = insertParsedDetails(ctx, tx, id, parsed); e != nil {
+			return e
+		}
+		return s.syncProfiles(ctx, tx, source.ID, source.Name, affected)
+	})
 }
 
 func (s *Service) importFileStatus(ctx context.Context, source config.Source, file RemoteLogFile, skipToday bool) (ImportFileStatus, error) {
@@ -434,7 +415,7 @@ func (s *Service) importFileStatus(ctx context.Context, source config.Source, fi
 	if err != nil {
 		return ImportFileStatus{}, err
 	}
-	if sameMetadata && hasRows {
+	if sameMetadata && (hasRows || record.rowCount == 0) && record.parserVersion == parserVersion {
 		return s.statusFromRecord(source, file, datePtr, record, true, "IMPORTED", "文件大小和修改时间未变化"), nil
 	}
 	if sameMetadata {
@@ -481,6 +462,9 @@ func (s *Service) selectedSources(ctx context.Context, requestedServerID string)
 		if dbSource, ok, err := s.settings.SourceByID(ctx, source.ID); err == nil && ok {
 			if !dbSource.Enabled {
 				continue
+			}
+			if strings.TrimSpace(dbSource.SMBFileGlob) != "" {
+				source.FileGlob = dbSource.SMBFileGlob
 			}
 			if strings.TrimSpace(dbSource.SourceName) != "" {
 				source.Name = dbSource.SourceName
@@ -546,286 +530,19 @@ func (s *Service) localFiles(source config.Source) ([]RemoteLogFile, error) {
 }
 
 type importedFileRecord struct {
-	id           int64
-	serverID     string
-	serverName   string
-	remotePath   string
-	fileName     string
-	logDate      sql.NullTime
-	fileSize     int64
-	lastModified time.Time
-	contentHash  string
-	importedAt   time.Time
-	rowCount     int
-	ignoredCount int
-}
-
-func (s *Service) findImportFile(ctx context.Context, serverID, remotePath string) (importedFileRecord, bool, error) {
-	return scanImportFile(s.db.QueryRowContext(ctx, importFileSelectQuery()+` where server_id = ? and remote_path_hash = ? and remote_path = ?`, serverID, remotePathHash(remotePath), remotePath))
-}
-
-func findImportFileTx(ctx context.Context, tx *sql.Tx, serverID, remotePath string) (importedFileRecord, bool, error) {
-	return scanImportFile(tx.QueryRowContext(ctx, importFileSelectQuery()+` where server_id = ? and remote_path_hash = ? and remote_path = ? for update`, serverID, remotePathHash(remotePath), remotePath))
-}
-
-func scanImportFile(row *sql.Row) (importedFileRecord, bool, error) {
-	var record importedFileRecord
-	err := row.Scan(&record.id, &record.serverID, &record.serverName, &record.remotePath, &record.fileName,
-		&record.logDate, &record.fileSize, &record.lastModified, &record.contentHash, &record.importedAt,
-		&record.rowCount, &record.ignoredCount)
-	if errors.Is(err, sql.ErrNoRows) {
-		return importedFileRecord{}, false, nil
-	}
-	if err != nil {
-		return importedFileRecord{}, false, err
-	}
-	return record, true, nil
-}
-
-func importFileSelectQuery() string {
-	return `select id, server_id, server_name, remote_path, file_name, log_date, file_size, last_modified, content_hash, imported_at, row_count, ignored_count from imported_server_log_files`
-}
-
-func upsertImportFile(ctx context.Context, tx *sql.Tx, existingID int64, source config.Source, file RemoteLogFile, logDate *time.Time, parsed parsedLogFile) (int64, error) {
-	importedAt := time.Now().UTC()
-	pathHash := remotePathHash(file.Path)
-	if existingID > 0 {
-		_, err := tx.ExecContext(ctx, `
-			update imported_server_log_files
-			set server_id = ?, server_name = ?, remote_path = ?, remote_path_hash = ?, file_name = ?, log_date = ?,
-			    file_size = ?, last_modified = ?, content_hash = ?, imported_at = ?, row_count = ?, ignored_count = ?
-			where id = ?
-		`, source.ID, source.Name, file.Path, pathHash, file.FileName, nullableDate(logDate), file.Size, file.LastModified, parsed.contentHash, importedAt, parsed.rowCount, parsed.ignoredCount, existingID)
-		return existingID, err
-	}
-	result, err := tx.ExecContext(ctx, `
-		insert into imported_server_log_files
-		    (server_id, server_name, remote_path, remote_path_hash, file_name, log_date, file_size, last_modified, content_hash, imported_at, row_count, ignored_count)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, source.ID, source.Name, file.Path, pathHash, file.FileName, nullableDate(logDate), file.Size, file.LastModified, parsed.contentHash, importedAt, parsed.rowCount, parsed.ignoredCount)
-	if err != nil {
-		return 0, err
-	}
-	return result.LastInsertId()
-}
-
-func remotePathHash(remotePath string) string {
-	sum := sha256.Sum256([]byte(remotePath))
-	return hex.EncodeToString(sum[:])
-}
-
-func loadFileStats(ctx context.Context, tx *sql.Tx, importFileID int64) (map[statKey]actionCounts, error) {
-	rows, err := tx.QueryContext(ctx, `
-		select stat_date, player_name, broken_count, placed_count
-		from player_server_log_file_stats
-		where import_file_id = ?
-	`, importFileID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	result := map[statKey]actionCounts{}
-	for rows.Next() {
-		var statDate time.Time
-		var playerName string
-		var counts actionCounts
-		if err := rows.Scan(&statDate, &playerName, &counts.broken, &counts.placed); err != nil {
-			return nil, err
-		}
-		result[statKey{statDate: statDate, playerName: playerName}] = counts
-	}
-	return result, rows.Err()
-}
-
-func loadFileSeenPlayers(ctx context.Context, tx *sql.Tx, importFileID int64) (map[string]struct{}, error) {
-	rows, err := tx.QueryContext(ctx, `select player_name from player_server_log_file_seen where import_file_id = ?`, importFileID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	result := map[string]struct{}{}
-	for rows.Next() {
-		var playerName string
-		if err := rows.Scan(&playerName); err != nil {
-			return nil, err
-		}
-		result[playerName] = struct{}{}
-	}
-	return result, rows.Err()
-}
-
-func applyDeltas(ctx context.Context, tx *sql.Tx, serverID, serverName string, previous, next map[statKey]actionCounts) error {
-	allKeys := map[statKey]struct{}{}
-	for key := range previous {
-		allKeys[key] = struct{}{}
-	}
-	for key := range next {
-		allKeys[key] = struct{}{}
-	}
-	for key := range allKeys {
-		prev := previous[key]
-		nxt := next[key]
-		brokenDelta := nxt.broken - prev.broken
-		placedDelta := nxt.placed - prev.placed
-		if brokenDelta == 0 && placedDelta == 0 {
-			continue
-		}
-		if err := applyDailyDelta(ctx, tx, serverID, serverName, key, brokenDelta, placedDelta); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func subtractDeltas(ctx context.Context, tx *sql.Tx, serverID, serverName string, previous map[statKey]actionCounts) error {
-	empty := map[statKey]actionCounts{}
-	return applyDeltas(ctx, tx, serverID, serverName, previous, empty)
-}
-
-func applyDailyDelta(ctx context.Context, tx *sql.Tx, serverID, serverName string, key statKey, brokenDelta, placedDelta int64) error {
-	var id int64
-	var currentBroken, currentPlaced int64
-	err := tx.QueryRowContext(ctx, `
-		select id, broken_count, placed_count
-		from player_server_daily_stats
-		where server_id = ? and stat_date = ? and player_name = ?
-		for update
-	`, serverID, key.statDate, key.playerName).Scan(&id, &currentBroken, &currentPlaced)
-	if errors.Is(err, sql.ErrNoRows) {
-		if brokenDelta <= 0 && placedDelta <= 0 {
-			return nil
-		}
-		_, err = tx.ExecContext(ctx, `
-			insert into player_server_daily_stats (server_id, server_name, stat_date, player_name, broken_count, placed_count)
-			values (?, ?, ?, ?, ?, ?)
-		`, serverID, serverName, key.statDate, key.playerName, maxInt64(0, brokenDelta), maxInt64(0, placedDelta))
-		return err
-	}
-	if err != nil {
-		return err
-	}
-	nextBroken := maxInt64(0, currentBroken+brokenDelta)
-	nextPlaced := maxInt64(0, currentPlaced+placedDelta)
-	if nextBroken == 0 && nextPlaced == 0 {
-		_, err = tx.ExecContext(ctx, `delete from player_server_daily_stats where id = ?`, id)
-		return err
-	}
-	_, err = tx.ExecContext(ctx, `
-		update player_server_daily_stats
-		set server_name = ?, broken_count = ?, placed_count = ?
-		where id = ?
-	`, serverName, nextBroken, nextPlaced, id)
-	return err
-}
-
-func deleteFileDetails(ctx context.Context, tx *sql.Tx, importFileID int64) error {
-	tables := []string{
-		"player_server_log_file_stats",
-		"player_server_log_file_seen",
-		"player_server_log_file_ore_stats",
-		"player_server_log_file_wood_stats",
-		"player_server_log_file_sapling_stats",
-		"player_server_log_file_milestones",
-	}
-	for _, table := range tables {
-		if _, err := tx.ExecContext(ctx, `delete from `+table+` where import_file_id = ?`, importFileID); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func insertParsedDetails(ctx context.Context, tx *sql.Tx, importFileID int64, parsed parsedLogFile) error {
-	for key, counts := range parsed.stats {
-		if counts.broken == 0 && counts.placed == 0 {
-			continue
-		}
-		if _, err := tx.ExecContext(ctx, `
-			insert into player_server_log_file_stats (import_file_id, stat_date, player_name, broken_count, placed_count)
-			values (?, ?, ?, ?, ?)
-		`, importFileID, key.statDate, key.playerName, counts.broken, counts.placed); err != nil {
-			return err
-		}
-	}
-	for playerName, firstSeenAt := range parsed.firstSeenByPlayer {
-		if _, err := tx.ExecContext(ctx, `
-			insert into player_server_log_file_seen (import_file_id, player_name, first_seen_at)
-			values (?, ?, ?)
-		`, importFileID, playerName, firstSeenAt); err != nil {
-			return err
-		}
-	}
-	if err := insertTypedCounts(ctx, tx, importFileID, parsed.oreCounts, "player_server_log_file_ore_stats", "ore_type", "ore_count"); err != nil {
-		return err
-	}
-	if err := insertTypedCounts(ctx, tx, importFileID, parsed.woodCounts, "player_server_log_file_wood_stats", "wood_type", "wood_count"); err != nil {
-		return err
-	}
-	if err := insertTypedCounts(ctx, tx, importFileID, parsed.saplingCounts, "player_server_log_file_sapling_stats", "sapling_type", "sapling_count"); err != nil {
-		return err
-	}
-	for key, value := range parsed.milestones {
-		if _, err := tx.ExecContext(ctx, `
-			insert into player_server_log_file_milestones (import_file_id, player_name, milestone_type, first_seen_at, detail)
-			values (?, ?, ?, ?, ?)
-		`, importFileID, key.playerName, key.typ, value.firstSeenAt, value.detail); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func insertTypedCounts(ctx context.Context, tx *sql.Tx, importFileID int64, counts map[typedPlayerKey]int64, table, typeColumn, countColumn string) error {
-	for key, count := range counts {
-		if count <= 0 {
-			continue
-		}
-		query := `insert into ` + table + ` (import_file_id, player_name, ` + typeColumn + `, ` + countColumn + `) values (?, ?, ?, ?)`
-		if _, err := tx.ExecContext(ctx, query, importFileID, key.playerName, key.typ, count); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Service) syncProfiles(ctx context.Context, tx *sql.Tx, serverID, serverName string, playerNames map[string]struct{}) error {
-	for playerName := range playerNames {
-		var firstSeen sql.NullTime
-		err := tx.QueryRowContext(ctx, `
-			select min(s.first_seen_at)
-			from player_server_log_file_seen s
-			join imported_server_log_files f on f.id = s.import_file_id
-			where f.server_id = ? and lower(s.player_name) = lower(?)
-		`, serverID, playerName).Scan(&firstSeen)
-		if err != nil {
-			return err
-		}
-		if !firstSeen.Valid {
-			if _, err := tx.ExecContext(ctx, `delete from player_server_profiles where server_id = ? and lower(player_name) = lower(?)`, serverID, playerName); err != nil {
-				return err
-			}
-			continue
-		}
-		if _, err := tx.ExecContext(ctx, `
-			insert into player_server_profiles (server_id, server_name, player_name, first_seen_at)
-			values (?, ?, ?, ?)
-			on duplicate key update server_name = values(server_name), player_name = values(player_name), first_seen_at = values(first_seen_at)
-		`, serverID, serverName, playerName, firstSeen.Time); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Service) hasImportedDetailRows(ctx context.Context, importFileID int64) (bool, error) {
-	var count int
-	err := s.db.QueryRowContext(ctx, `
-		select (
-			(select count(*) from player_server_log_file_seen where import_file_id = ?) +
-			(select count(*) from player_server_log_file_stats where import_file_id = ?)
-		)
-	`, importFileID, importFileID).Scan(&count)
-	return count > 0, err
+	id            int64
+	serverID      string
+	serverName    string
+	remotePath    string
+	fileName      string
+	logDate       sql.NullTime
+	fileSize      int64
+	lastModified  time.Time
+	contentHash   string
+	importedAt    time.Time
+	rowCount      int
+	ignoredCount  int
+	parserVersion int
 }
 
 var logFileDatePattern = regexp.MustCompile(`.*?(\d{4}-\d{2}-\d{2}).*\.(?:csv|txt)$`)
@@ -895,7 +612,7 @@ func appendResult(files []FileImportResult, listener ProgressListener, result Fi
 	return files
 }
 
-func rollbackQuietly(tx *sql.Tx) {
+func rollbackQuietly(tx *storage.Tx) {
 	_ = tx.Rollback()
 }
 

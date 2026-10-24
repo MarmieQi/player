@@ -4,68 +4,35 @@ package groupchat
 
 import (
 	"context"
-	"database/sql"
-	"path"
 	"path/filepath"
-	"strings"
+	"player-stats-backend-go/internal/storage"
 
 	"player-stats-backend-go/internal/auth"
 	"player-stats-backend-go/internal/config"
 	"player-stats-backend-go/internal/importer"
+	"player-stats-backend-go/internal/settings"
 )
 
-type CopyConfig struct {
-	Enabled      bool   `json:"enabled"`
-	SMBDirectory string `json:"smbDirectory"`
-	FileGlob     string `json:"fileGlob"`
-}
+type CopyConfig = settings.ChatDirectory
 
 type CopyService struct {
-	db          *sql.DB
+	db          *storage.DB
 	archiveRoot string
 	copier      *importer.Service
 	jobs        *importer.JobService
 }
 
-func NewCopyService(db *sql.DB, cfg config.Config, copier *importer.Service) *CopyService {
+func NewCopyService(db *storage.DB, cfg config.Config, copier *importer.Service) *CopyService {
 	return &CopyService{db: db, archiveRoot: filepath.Join(cfg.LogArchiveDirectory, "chat"), copier: copier, jobs: importer.NewJobService(copier)}
 }
 
 func (s *CopyService) Close() { s.jobs.Close() }
 
-func NormalizeCopyConfig(c CopyConfig) (CopyConfig, error) {
-	c.SMBDirectory = strings.Trim(strings.ReplaceAll(strings.TrimSpace(c.SMBDirectory), "\\", "/"), "/")
-	for _, part := range strings.Split(c.SMBDirectory, "/") {
-		if part == ".." {
-			return c, auth.NewHTTPError(400, "聊天目录不能包含上级路径")
-		}
-	}
-	if strings.ContainsAny(c.SMBDirectory, ":\x00") || len(c.SMBDirectory) > 1024 {
-		return c, auth.NewHTTPError(400, "请填写 SMB 共享内的相对目录")
-	}
-	c.SMBDirectory = path.Clean(c.SMBDirectory)
-	if c.SMBDirectory == "." {
-		c.SMBDirectory = ""
-	}
-	if c.Enabled && c.SMBDirectory == "" {
-		return c, auth.NewHTTPError(400, "请填写聊天日志目录")
-	}
-	c.FileGlob = strings.TrimSpace(c.FileGlob)
-	if c.FileGlob == "" {
-		c.FileGlob = "*.txt"
-	}
-	if strings.ContainsAny(c.FileGlob, "/\\\x00") || len(c.FileGlob) > 128 || !strings.HasSuffix(c.FileGlob, ".txt") {
-		return c, auth.NewHTTPError(400, "聊天文件匹配必须是 TXT 文件名规则，例如 *.txt")
-	}
-	if _, err := filepath.Match(c.FileGlob, "2026-10-23.txt"); err != nil {
-		return c, auth.NewHTTPError(400, "文件匹配规则无效")
-	}
-	return c, nil
-}
+func NormalizeCopyConfig(c CopyConfig) (CopyConfig, error) { return settings.NormalizeChatDirectory(c) }
 
 func (s *CopyService) Config(ctx context.Context) (CopyConfig, error) {
 	var c CopyConfig
-	err := s.db.QueryRowContext(ctx, `select enabled, smb_directory, file_glob from group_chat_copy_config where id = 1`).Scan(&c.Enabled, &c.SMBDirectory, &c.FileGlob)
+	err := s.db.QueryRowContext(ctx, `select enabled,smb_directory,smb_file_glob from log_sources where source_id='group-chat'`).Scan(&c.Enabled, &c.SMBDirectory, &c.FileGlob)
 	return c, err
 }
 
@@ -74,7 +41,7 @@ func (s *CopyService) SaveConfig(ctx context.Context, c CopyConfig) (CopyConfig,
 	if err != nil {
 		return c, err
 	}
-	_, err = s.db.ExecContext(ctx, `update group_chat_copy_config set enabled = ?, smb_directory = ?, file_glob = ? where id = 1`, normalized.Enabled, normalized.SMBDirectory, normalized.FileGlob)
+	_, err = s.db.ExecContext(ctx, `update log_sources set enabled=?,smb_directory=?,smb_file_glob=? where source_id='group-chat'`, normalized.Enabled, normalized.SMBDirectory, normalized.FileGlob)
 	return normalized, err
 }
 

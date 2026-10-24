@@ -5,22 +5,19 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
-	"errors"
-	"io/fs"
-	"path/filepath"
-	"strings"
-
 	"player-stats-backend-go/internal/config"
+	"player-stats-backend-go/internal/storage"
+	"strings"
 )
 
 const AstrBotAPIKeyHeader = "X-Player-Stats-Key"
 
 type Service struct {
-	db  *sql.DB
+	db  *storage.DB
 	cfg config.Config
 }
 
-func NewService(db *sql.DB, cfg config.Config) *Service {
+func NewService(db *storage.DB, cfg config.Config) *Service {
 	return &Service{db: db, cfg: cfg}
 }
 
@@ -80,288 +77,137 @@ type RemoteLogFile struct {
 	LastModified any    `json:"lastModified"`
 }
 
-func (s *Service) GetSyncConfig(ctx context.Context) (SyncConfigResponse, error) {
-	cfg, err := s.readSyncConfig(ctx)
+func (s *Service) Sources(ctx context.Context) ([]SyncSource, error) {
+	rows, err := s.db.QueryContext(ctx, `select case source_id when 'main' then 1 else 2 end,source_id,source_name,smb_directory,smb_file_glob,smb_recursive,enabled from log_sources where kind='csv' order by source_id`)
 	if err != nil {
-		return SyncConfigResponse{}, err
+		return nil, err
 	}
-	sources, err := s.Sources(ctx)
-	if err != nil {
-		return SyncConfigResponse{}, err
+	defer rows.Close()
+	out := []SyncSource{}
+	for rows.Next() {
+		var v SyncSource
+		var id int64
+		if err := rows.Scan(&id, &v.SourceID, &v.SourceName, &v.SMBDirectory, &v.SMBFileGlob, &v.SMBRecursive, &v.Enabled); err != nil {
+			return nil, err
+		}
+		v.ID = &id
+		out = append(out, v)
 	}
-	cfg.Sources = sources
-	cfg.AutoTasks = s.autoTasks(cfg, sources)
-	if cfg.SMBPassword != "" {
-		cfg.SMBPassword = "********"
-	}
-	return cfg, nil
+	return out, rows.Err()
 }
-
-func (s *Service) SaveSyncConfig(ctx context.Context, request SyncConfigResponse) (SyncConfigResponse, error) {
-	current, err := s.readSyncConfig(ctx)
+func (s *Service) SourceByID(ctx context.Context, id string) (SyncSource, bool, error) {
+	all, err := s.Sources(ctx)
 	if err != nil {
-		return SyncConfigResponse{}, err
+		return SyncSource{}, false, err
 	}
-	password := current.SMBPassword
-	if strings.TrimSpace(request.SMBPassword) != "" && strings.TrimSpace(request.SMBPassword) != "********" {
-		password = request.SMBPassword
-	}
-	shareTTL := NormalizeShareTTL(request.ShareTTLMinutes)
-	logQueryShareTTL := NormalizeShareTTL(request.LogQueryShareTTLMinutes)
-	_, err = s.db.ExecContext(ctx, `
-		update sync_config
-		set smb_host = ?, smb_port = ?, smb_domain = ?, smb_username = ?, smb_password = ?, smb_share = ?,
-		    auto_run = ?, sync_cron = ?, skip_today = ?, share_ttl_minutes = ?, log_query_share_ttl_minutes = ?,
-		    auto_sync_main_enabled = ?, auto_sync_main_time = ?, auto_import_main_enabled = ?, auto_import_main_time = ?,
-		    auto_sync_sub_enabled = ?, auto_sync_sub_time = ?, auto_import_sub_enabled = ?, auto_import_sub_time = ?
-		where id = 1
-	`, request.SMBHost, defaultPort(request.SMBPort), request.SMBDomain, request.SMBUsername, password, request.SMBShare,
-		request.AutoRun, defaultString(request.SyncCron, "0 30 0 * * *"), request.SkipToday, shareTTL, logQueryShareTTL,
-		autoBool(request.AutoTasks, "main", "sync", request.AutoRun), autoTime(request.AutoTasks, "main", "sync", "00:20"),
-		autoBool(request.AutoTasks, "main", "import", request.AutoRun), autoTime(request.AutoTasks, "main", "import", "00:30"),
-		autoBool(request.AutoTasks, "sub", "sync", request.AutoRun), autoTime(request.AutoTasks, "sub", "sync", "00:40"),
-		autoBool(request.AutoTasks, "sub", "import", request.AutoRun), autoTime(request.AutoTasks, "sub", "import", "00:50"),
-	)
-	if err != nil {
-		return SyncConfigResponse{}, err
-	}
-	if len(request.Sources) > 0 {
-		if err := s.SaveSources(ctx, request.Sources); err != nil {
-			return SyncConfigResponse{}, err
+	for _, v := range all {
+		if v.SourceID == id {
+			return v, true, nil
 		}
 	}
-	return s.GetSyncConfig(ctx)
+	return SyncSource{}, false, nil
 }
-
+func (s *Service) SMBConnectionConfig(ctx context.Context) (SMBConnectionConfig, error) {
+	var v SMBConnectionConfig
+	e := s.db.QueryRowContext(ctx, `select host,port,domain,username,password,share from smb_connections where id=1`).Scan(&v.Host, &v.Port, &v.Domain, &v.Username, &v.Password, &v.Share)
+	return v, e
+}
+func (s *Service) SkipToday(ctx context.Context) (bool, error) {
+	var v bool
+	e := s.db.QueryRowContext(ctx, `select skip_today from ingest_policy where id=1`).Scan(&v)
+	return v, e
+}
 func (s *Service) AstrBotKey(ctx context.Context) (AstrBotKeyResponse, error) {
-	var key sql.NullString
-	if err := s.db.QueryRowContext(ctx, `select astrbot_api_key from sync_config where id = 1`).Scan(&key); err != nil {
-		return AstrBotKeyResponse{}, err
-	}
-	return AstrBotKeyResponse{APIKey: key.String, HeaderName: AstrBotAPIKeyHeader}, nil
+	var v AstrBotKeyResponse
+	v.HeaderName = AstrBotAPIKeyHeader
+	e := s.db.QueryRowContext(ctx, `select astrbot_api_key from sharing_settings where id=1`).Scan(&v.APIKey)
+	return v, e
 }
-
 func (s *Service) ResetAstrBotKey(ctx context.Context) (AstrBotKeyResponse, error) {
 	key, err := generateAPIKey()
 	if err != nil {
 		return AstrBotKeyResponse{}, err
 	}
-	if _, err := s.db.ExecContext(ctx, `update sync_config set astrbot_api_key = ? where id = 1`, key); err != nil {
-		return AstrBotKeyResponse{}, err
-	}
-	return AstrBotKeyResponse{APIKey: key, HeaderName: AstrBotAPIKeyHeader}, nil
+	_, err = s.db.ExecContext(ctx, `update sharing_settings set astrbot_api_key=? where id=1`, key)
+	return AstrBotKeyResponse{APIKey: key, HeaderName: AstrBotAPIKeyHeader}, err
 }
-
 func (s *Service) ShareTTLMinutes(ctx context.Context) int {
-	var minutes int
-	if err := s.db.QueryRowContext(ctx, `select share_ttl_minutes from sync_config where id = 1`).Scan(&minutes); err != nil {
+	p, e := s.Sharing(ctx)
+	if e != nil {
 		return 60
 	}
-	return NormalizeShareTTL(minutes)
+	return p.ShareTTLMinutes
 }
-
 func (s *Service) LogQueryShareTTLMinutes(ctx context.Context) int {
-	var minutes int
-	if err := s.db.QueryRowContext(ctx, `select log_query_share_ttl_minutes from sync_config where id = 1`).Scan(&minutes); err != nil {
+	p, e := s.Sharing(ctx)
+	if e != nil {
 		return 60
 	}
-	return NormalizeShareTTL(minutes)
+	return p.LogQueryShareTTLMinutes
+}
+func (s *Service) GetSyncConfig(ctx context.Context) (SyncConfigResponse, error) {
+	smb, e := s.SMB(ctx)
+	if e != nil {
+		return SyncConfigResponse{}, e
+	}
+	plans, e := s.Schedules(ctx)
+	if e != nil {
+		return SyncConfigResponse{}, e
+	}
+	share, e := s.Sharing(ctx)
+	if e != nil {
+		return SyncConfigResponse{}, e
+	}
+	return SyncConfigResponse{SMBHost: smb.Host, SMBPort: smb.Port, SMBDomain: smb.Domain, SMBUsername: smb.Username, SMBPassword: smb.Password, SMBShare: smb.Share, Sources: smb.Sources, AutoTasks: plans.Tasks, SkipToday: plans.SkipToday, ShareTTLMinutes: share.ShareTTLMinutes, LogQueryShareTTLMinutes: share.LogQueryShareTTLMinutes}, nil
 }
 
-// SkipToday returns the business setting once per file-list operation.
-func (s *Service) SkipToday(ctx context.Context) (bool, error) {
-	var skip bool
-	err := s.db.QueryRowContext(ctx, `select skip_today from sync_config where id = 1`).Scan(&skip)
-	return skip, err
-}
-
-func (s *Service) SMBConnectionConfig(ctx context.Context) (SMBConnectionConfig, error) {
-	cfg, err := s.readSyncConfig(ctx)
-	if err != nil {
-		return SMBConnectionConfig{}, err
+// Compatibility endpoint delegates to the same validation and repository writes.
+func (s *Service) SaveSyncConfig(ctx context.Context, p SyncConfigResponse) (SyncConfigResponse, error) {
+	smb, e := s.SMB(ctx)
+	if e != nil {
+		return p, e
 	}
-	return SMBConnectionConfig{
-		Host:     strings.TrimSpace(cfg.SMBHost),
-		Port:     defaultPort(cfg.SMBPort),
-		Domain:   strings.TrimSpace(cfg.SMBDomain),
-		Username: strings.TrimSpace(cfg.SMBUsername),
-		Password: cfg.SMBPassword,
-		Share:    strings.TrimSpace(cfg.SMBShare),
-	}, nil
-}
-
-func (s *Service) Sources(ctx context.Context) ([]SyncSource, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		select id, source_id, source_name, coalesce(smb_directory, ''), coalesce(smb_file_glob, ''), smb_recursive, enabled
-		from sync_source_config
-		order by source_id
-	`)
-	if err != nil {
-		return nil, err
+	smb.Host = p.SMBHost
+	smb.Port = defaultPort(p.SMBPort)
+	smb.Domain = p.SMBDomain
+	smb.Username = p.SMBUsername
+	smb.Password = p.SMBPassword
+	smb.Share = p.SMBShare
+	if len(p.Sources) > 0 {
+		smb.Sources = p.Sources
 	}
-	defer rows.Close()
-	result := make([]SyncSource, 0)
-	for rows.Next() {
-		var source SyncSource
-		var id int64
-		if err := rows.Scan(&id, &source.SourceID, &source.SourceName, &source.SMBDirectory, &source.SMBFileGlob, &source.SMBRecursive, &source.Enabled); err != nil {
-			return nil, err
-		}
-		source.ID = &id
-		result = append(result, source)
+	plans, e := s.Schedules(ctx)
+	if e != nil {
+		return p, e
 	}
-	return result, rows.Err()
-}
-
-func (s *Service) SaveSources(ctx context.Context, sources []SyncSource) error {
-	for _, source := range sources {
-		if source.ID != nil {
-			_, err := s.db.ExecContext(ctx, `
-				update sync_source_config
-				set source_name = ?, smb_directory = ?, smb_file_glob = ?, smb_recursive = ?, enabled = ?
-				where id = ?
-			`, source.SourceName, source.SMBDirectory, defaultString(source.SMBFileGlob, "player_actions_*.csv"), source.SMBRecursive, source.Enabled, *source.ID)
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		if strings.TrimSpace(source.SourceID) == "" {
-			continue
-		}
-		_, err := s.db.ExecContext(ctx, `
-			insert into sync_source_config (source_id, source_name, smb_directory, smb_file_glob, smb_recursive, enabled)
-			values (?, ?, ?, ?, ?, ?)
-			on duplicate key update source_name = values(source_name), smb_directory = values(smb_directory),
-			    smb_file_glob = values(smb_file_glob), smb_recursive = values(smb_recursive), enabled = values(enabled)
-		`, source.SourceID, source.SourceName, source.SMBDirectory, defaultString(source.SMBFileGlob, "player_actions_*.csv"), source.SMBRecursive, source.Enabled)
-		if err != nil {
-			return err
-		}
+	plans.SkipToday = p.SkipToday
+	if len(p.AutoTasks) > 0 {
+		plans.Tasks = p.AutoTasks
 	}
-	return nil
-}
-
-func (s *Service) SourceByID(ctx context.Context, sourceID string) (SyncSource, bool, error) {
-	var source SyncSource
-	var id int64
-	err := s.db.QueryRowContext(ctx, `
-		select id, source_id, source_name, coalesce(smb_directory, ''), coalesce(smb_file_glob, ''), smb_recursive, enabled
-		from sync_source_config
-		where source_id = ?
-	`, sourceID).Scan(&id, &source.SourceID, &source.SourceName, &source.SMBDirectory, &source.SMBFileGlob, &source.SMBRecursive, &source.Enabled)
-	if errors.Is(err, sql.ErrNoRows) {
-		return SyncSource{}, false, nil
+	share := SharingSettings{p.ShareTTLMinutes, p.LogQueryShareTTLMinutes}
+	if e = validateSMB(&smb); e != nil {
+		return p, e
 	}
-	if err != nil {
-		return SyncSource{}, false, err
+	if e = validatePlans(plans); e != nil {
+		return p, e
 	}
-	source.ID = &id
-	return source, true, nil
-}
-
-func (s *Service) LocalSourceFiles(ctx context.Context, sourceID string) ([]RemoteLogFile, error) {
-	source, ok := s.cfgSource(sourceID)
-	if !ok {
-		return nil, errors.New("找不到数据源：" + sourceID)
+	if e = validateSharing(share); e != nil {
+		return p, e
 	}
-	pattern := defaultString(source.FileGlob, "player_actions_*.csv")
-	files := make([]RemoteLogFile, 0)
-	err := filepath.WalkDir(source.Directory, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
+	e = s.db.Write(ctx, func(tx *storage.Tx) error {
+		if e := saveSMBTx(ctx, tx, smb); e != nil {
+			return e
 		}
-		if entry.IsDir() {
-			if path != source.Directory {
-				return filepath.SkipDir
-			}
-			return nil
+		if e := savePlansTx(ctx, tx, plans); e != nil {
+			return e
 		}
-		matched, err := filepath.Match(pattern, filepath.Base(path))
-		if err != nil || !matched {
-			return nil
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return nil
-		}
-		files = append(files, RemoteLogFile{
-			FileName:     info.Name(),
-			Path:         path,
-			Size:         info.Size(),
-			LastModified: info.ModTime(),
-		})
-		return nil
+		return saveSharingTx(ctx, tx, share)
 	})
-	if err != nil {
-		return nil, err
+	if e != nil {
+		return p, e
 	}
-	return files, nil
+	return s.GetSyncConfig(ctx)
 }
-
-func (s *Service) readSyncConfig(ctx context.Context) (SyncConfigResponse, error) {
-	var cfg SyncConfigResponse
-	err := s.db.QueryRowContext(ctx, `
-		select coalesce(smb_host, ''), smb_port, coalesce(smb_domain, ''), coalesce(smb_username, ''),
-		       coalesce(smb_password, ''), coalesce(smb_share, ''), auto_run, coalesce(sync_cron, ''),
-		       skip_today, share_ttl_minutes, log_query_share_ttl_minutes
-		from sync_config where id = 1
-	`).Scan(&cfg.SMBHost, &cfg.SMBPort, &cfg.SMBDomain, &cfg.SMBUsername, &cfg.SMBPassword, &cfg.SMBShare,
-		&cfg.AutoRun, &cfg.SyncCron, &cfg.SkipToday, &cfg.ShareTTLMinutes, &cfg.LogQueryShareTTLMinutes)
-	if err != nil {
-		return SyncConfigResponse{}, err
-	}
-	cfg.ShareTTLMinutes = NormalizeShareTTL(cfg.ShareTTLMinutes)
-	cfg.LogQueryShareTTLMinutes = NormalizeShareTTL(cfg.LogQueryShareTTLMinutes)
-	return cfg, nil
-}
-
-func (s *Service) autoTasks(cfg SyncConfigResponse, sources []SyncSource) []AutoTaskSetting {
-	result := make([]AutoTaskSetting, 0, len(sources))
-	for _, source := range sources {
-		switch strings.ToLower(strings.TrimSpace(source.SourceID)) {
-		case "main":
-			result = append(result, s.readAutoTask("main", source.SourceName, "00:20", "00:30", cfg.AutoRun))
-		case "sub":
-			result = append(result, s.readAutoTask("sub", source.SourceName, "00:40", "00:50", cfg.AutoRun))
-		default:
-			result = append(result, AutoTaskSetting{ServerID: source.SourceID, ServerName: source.SourceName, SyncTime: "01:00", ImportTime: "01:10"})
-		}
-	}
-	return result
-}
-
-func (s *Service) readAutoTask(serverID, serverName, defaultSync, defaultImport string, defaultEnabled bool) AutoTaskSetting {
-	var syncEnabled, importEnabled sql.NullBool
-	var syncTime, importTime sql.NullString
-	if serverID == "main" {
-		_ = s.db.QueryRow(`
-			select auto_sync_main_enabled, auto_sync_main_time, auto_import_main_enabled, auto_import_main_time from sync_config where id = 1
-		`).Scan(&syncEnabled, &syncTime, &importEnabled, &importTime)
-	} else {
-		_ = s.db.QueryRow(`
-			select auto_sync_sub_enabled, auto_sync_sub_time, auto_import_sub_enabled, auto_import_sub_time from sync_config where id = 1
-		`).Scan(&syncEnabled, &syncTime, &importEnabled, &importTime)
-	}
-	return AutoTaskSetting{
-		ServerID:      serverID,
-		ServerName:    serverName,
-		SyncEnabled:   nullBool(syncEnabled, defaultEnabled),
-		SyncTime:      normalizeTime(syncTime.String, defaultSync),
-		ImportEnabled: nullBool(importEnabled, defaultEnabled),
-		ImportTime:    normalizeTime(importTime.String, defaultImport),
-	}
-}
-
-func (s *Service) cfgSource(sourceID string) (config.Source, bool) {
-	for _, source := range s.cfg.Sources() {
-		if source.ID == sourceID {
-			return source, true
-		}
-	}
-	return config.Source{}, false
-}
-
 func NormalizeShareTTL(minutes int) int {
 	if minutes <= 0 {
 		return 60
@@ -400,38 +246,6 @@ func defaultString(value, fallback string) string {
 func nullBool(value sql.NullBool, fallback bool) bool {
 	if value.Valid {
 		return value.Bool
-	}
-	return fallback
-}
-
-func autoBool(tasks []AutoTaskSetting, serverID, kind string, fallback bool) bool {
-	for _, task := range tasks {
-		if strings.EqualFold(task.ServerID, serverID) {
-			if kind == "sync" {
-				return task.SyncEnabled
-			}
-			return task.ImportEnabled
-		}
-	}
-	return fallback
-}
-
-func autoTime(tasks []AutoTaskSetting, serverID, kind, fallback string) string {
-	for _, task := range tasks {
-		if strings.EqualFold(task.ServerID, serverID) {
-			if kind == "sync" {
-				return normalizeTime(task.SyncTime, fallback)
-			}
-			return normalizeTime(task.ImportTime, fallback)
-		}
-	}
-	return fallback
-}
-
-func normalizeTime(value, fallback string) string {
-	value = strings.TrimSpace(value)
-	if len(value) == 5 && value[2] == ':' {
-		return value
 	}
 	return fallback
 }

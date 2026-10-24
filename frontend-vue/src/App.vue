@@ -18,7 +18,6 @@ import {
   Crosshair,
   Crown,
   Database,
-  Download,
   FileText,
   Hammer,
   Layers,
@@ -37,7 +36,7 @@ import {
   UserRound,
   UsersRound
 } from 'lucide-vue-next'
-import { apiDelete, apiGet, apiPost, apiPostJson, apiPutJson, clearAuthToken, getAuthToken, setAuthToken } from './api'
+import { apiDelete, apiGet, apiPost, apiPostJson, clearAuthToken, getAuthToken, setAuthToken } from './api'
 import { isBucketLogAction, logQueryActionDisplay, logQuerySummaryDetailText, logShareActionClass } from './log-presentation'
 import { adminNavigationId } from './admin/navigation'
 import { LOG_QUERY_TYPE_COORDINATE, LOG_QUERY_TYPE_PLAYER_KEYWORD, LOG_QUERY_TYPE_XRAY, normalizeLogQueryMode, logFeatureLocation, parseLogFeatureLocation } from './admin/log-feature-navigation'
@@ -49,10 +48,9 @@ const AdminLogin = defineAsyncComponent(() => import('./admin/AdminLogin.vue'))
 const PlayerNameAutocomplete = defineAsyncComponent(() => import('./admin/PlayerNameAutocomplete.vue'))
 const LogActionFilter = defineAsyncComponent(() => import('./admin/LogActionFilter.vue'))
 const FileSyncPage = defineAsyncComponent(() => import('./admin/FileSyncPage.vue'))
-const SmbDirectorySettings = defineAsyncComponent(() => import('./admin/SmbDirectorySettings.vue'))
-const GroupChatCopySchedule = defineAsyncComponent(() => import('./admin/GroupChatCopySchedule.vue'))
 const GroupChatCopyPage = defineAsyncComponent(() => import('./admin/GroupChatCopyPage.vue'))
-const GroupChatCopySettings = defineAsyncComponent(() => import('./admin/GroupChatCopySettings.vue'))
+const SettingsPage = defineAsyncComponent(() => import('./admin/SettingsPage.vue'))
+const settingsPage = ref(null)
 const GroupChatPage = defineAsyncComponent(() => import('./admin/GroupChatPage.vue'))
 const AdminSelect = defineAsyncComponent(() => import('./admin/AdminSelect.vue'))
 const LogQueryTabs = defineAsyncComponent(() => import('./admin/LogQueryTabs.vue'))
@@ -68,25 +66,6 @@ const remoteFiles = ref([])
 const syncLocalFiles = ref([])
 const syncSkipToday = ref(true)
 const importSkipToday = ref(true)
-const syncConfig = ref(null)
-const savedSyncConfig = ref('')
-const settingsDirty = computed(() => Boolean(syncConfig.value) && JSON.stringify(syncConfig.value) !== savedSyncConfig.value)
-let sourcePreviewVersion = 0
-const settingsSaving = ref(false)
-const chatDirectorySettings = ref(null)
-const chatScheduleSettings = ref(null)
-const chatSettingsReady = computed(() => chatDirectorySettings.value?.ready && chatScheduleSettings.value?.ready)
-const settingsLoading = ref(false)
-const smbTesting = ref(false)
-const autoTaskLogs = ref([])
-const autoTaskLogsLoading = ref(false)
-const autoTaskLogsClearing = ref(false)
-const showSmbPassword = ref(false)
-const astrbotKey = ref(null)
-const astrbotKeyLoading = ref(false)
-const astrbotKeyResetting = ref(false)
-const sourceFiles = ref({})
-const sourceFilesLoading = ref({})
 const importing = ref(false)
 const error = ref('')
 const loginError = ref('')
@@ -640,6 +619,7 @@ async function login() {
 }
 
 async function logout() {
+  if (currentView.value === 'settingsPage' && settingsPage.value && !settingsPage.value.canLeave()) return
   stopImportJobPolling()
   stopSyncJobPolling()
   stopLogQueryPolling()
@@ -1018,7 +998,6 @@ async function openSettingsPage() {
   window.location.hash = '#/settings'
   error.value = ''
   importMessage.value = ''
-  await Promise.all([loadSyncConfig(), loadAstrbotKey(), loadAutoTaskLogs()])
 }
 
 function openProfilePage() {
@@ -1730,200 +1709,6 @@ async function changePassword() {
   }
 }
 
-async function loadSyncConfig() {
-  settingsLoading.value = true
-  error.value = ''
-  try {
-    syncConfig.value = normalizeSyncConfig(await apiGet('/api/config/sync'))
-    savedSyncConfig.value = JSON.stringify(syncConfig.value)
-    sourcePreviewVersion++
-    sourceFiles.value = {}; sourceFilesLoading.value = {}
-  } catch (err) {
-    handleApiError(err)
-  } finally {
-    settingsLoading.value = false
-  }
-}
-
-function normalizeSyncConfig(config) {
-  const normalized = {
-    ...config,
-    skipToday: config.skipToday !== false,
-    shareTtlMinutes: normalizeShareTtlMinutes(config.shareTtlMinutes),
-    logQueryShareTtlMinutes: normalizeShareTtlMinutes(config.logQueryShareTtlMinutes),
-    autoTasks: (Array.isArray(config.autoTasks) ? config.autoTasks : []).map(normalizeAutoTask)
-  }
-  return normalized
-}
-
-function normalizeAutoTask(task) {
-  return {
-    serverId: task.serverId || '',
-    serverName: task.serverName || task.serverId || '',
-    syncEnabled: Boolean(task.syncEnabled),
-    syncTime: validTime(task.syncTime) || defaultSyncTime(task.serverId),
-    importEnabled: Boolean(task.importEnabled),
-    importTime: validTime(task.importTime) || defaultImportTime(task.serverId)
-  }
-}
-
-function normalizeShareTtlMinutes(value) {
-  const minutes = Number(value)
-  if (!Number.isFinite(minutes) || minutes <= 0) return 60
-  return Math.max(5, Math.min(Math.round(minutes), 10080))
-}
-
-function defaultSyncTime(serverId) {
-  return serverId === 'sub' ? '00:40' : '00:20'
-}
-
-function defaultImportTime(serverId) {
-  return serverId === 'sub' ? '00:50' : '00:30'
-}
-
-function validTime(value) {
-  const text = String(value || '').trim()
-  return /^\d{2}:\d{2}$/.test(text) ? text : ''
-}
-
-async function loadAstrbotKey() {
-  astrbotKeyLoading.value = true
-  error.value = ''
-  try {
-    astrbotKey.value = await apiGet('/api/config/astrbot-key')
-  } catch (err) {
-    handleApiError(err)
-  } finally {
-    astrbotKeyLoading.value = false
-  }
-}
-
-async function loadAutoTaskLogs() {
-  autoTaskLogsLoading.value = true
-  try {
-    autoTaskLogs.value = asArray(await apiGet('/api/import/auto-task-logs', { limit: 80 }))
-  } catch (err) {
-    handleApiError(err)
-  } finally {
-    autoTaskLogsLoading.value = false
-  }
-}
-
-async function clearAutoTaskLogs() {
-  const ok = window.confirm('确定清空所有自动任务日志吗？这个操作不会影响已复制的 CSV 或已入库数据。')
-  if (!ok) {
-    return
-  }
-
-  autoTaskLogsClearing.value = true
-  error.value = ''
-  importMessage.value = ''
-  try {
-    await apiDelete('/api/import/auto-task-logs')
-    autoTaskLogs.value = []
-    importMessage.value = '自动任务日志已清空'
-  } catch (err) {
-    handleApiError(err)
-  } finally {
-    autoTaskLogsClearing.value = false
-  }
-}
-
-async function resetAstrbotKey() {
-  const ok = window.confirm('重置后旧的 AstrBot 插件密钥会立即失效，需要同步更新 AstrBot 插件配置。确定继续吗？')
-  if (!ok) {
-    return
-  }
-
-  astrbotKeyResetting.value = true
-  error.value = ''
-  importMessage.value = ''
-  try {
-    astrbotKey.value = await apiPost('/api/config/astrbot-key/reset')
-    importMessage.value = 'AstrBot 插件密钥已重置'
-  } catch (err) {
-    handleApiError(err)
-  } finally {
-    astrbotKeyResetting.value = false
-  }
-}
-
-async function copyAstrbotKey() {
-  if (!astrbotKey.value?.apiKey) {
-    return
-  }
-
-  try {
-    await navigator.clipboard.writeText(astrbotKey.value.apiKey)
-    importMessage.value = 'AstrBot 插件密钥已复制'
-  } catch (err) {
-    error.value = '复制失败，请手动选中密钥复制'
-  }
-}
-
-async function saveSyncConfig() {
-  settingsSaving.value = true
-  error.value = ''
-  importMessage.value = ''
-  try {
-    const directory = chatDirectorySettings.value
-    const schedule = chatScheduleSettings.value
-    directory.validate()
-    schedule.validate()
-    syncConfig.value = normalizeSyncConfig(await apiPutJson('/api/config/sync', syncConfig.value))
-    savedSyncConfig.value = JSON.stringify(syncConfig.value)
-    sourcePreviewVersion++
-    sourceFiles.value = {}; sourceFilesLoading.value = {}
-    await directory.save()
-    await schedule.save()
-    await loadAutoTaskLogs()
-    importMessage.value = '配置已保存'
-  } catch (err) {
-    handleApiError(err)
-  } finally {
-    settingsSaving.value = false
-  }
-}
-
-async function loadSourceFiles(sourceId) {
-  const version = sourcePreviewVersion
-  sourceFilesLoading.value = { ...sourceFilesLoading.value, [sourceId]: true }
-  try {
-    const result = await apiGet('/api/config/source-files', { sourceId })
-    if (version !== sourcePreviewVersion) return
-    if (result.success) {
-      sourceFiles.value = { ...sourceFiles.value, [sourceId]: asArray(result.files) }
-    } else {
-      sourceFiles.value = { ...sourceFiles.value, [sourceId]: [] }
-      error.value = result.message
-    }
-  } catch (err) {
-    if (version !== sourcePreviewVersion) return
-    sourceFiles.value = { ...sourceFiles.value, [sourceId]: [] }
-    handleApiError(err)
-  } finally {
-    if (version === sourcePreviewVersion) sourceFilesLoading.value = { ...sourceFilesLoading.value, [sourceId]: false }
-  }
-}
-
-async function testSmbConnection() {
-  smbTesting.value = true
-  error.value = ''
-  importMessage.value = ''
-  try {
-    const result = await apiPost('/api/config/smb-test')
-    if (result.success) {
-      importMessage.value = result.message
-    } else {
-      error.value = result.message
-    }
-  } catch (err) {
-    handleApiError(err)
-  } finally {
-    smbTesting.value = false
-  }
-}
-
 async function goDashboard() {
   stopImportJobPolling()
   stopSyncJobPolling()
@@ -1953,6 +1738,7 @@ function selectServer(serverId) {
 
 // The shell emits intent; page loaders retain ownership of data and task state.
 async function navigateAdmin(id) {
+  if (currentView.value === 'settingsPage' && id !== 'settings' && settingsPage.value && !settingsPage.value.canLeave()) return
   const serverId = filters.value.serverId === 'all'
     ? (serverOptions.value[0]?.serverId || 'main')
     : filters.value.serverId
@@ -1975,6 +1761,11 @@ async function navigateAdmin(id) {
 async function handleAdminHashChange() {
   if (!authChecked.value || !authenticated.value) return
   const hash = window.location.hash || ''
+  if (hash === '#admin-main') return
+  if (currentView.value === 'settingsPage' && hash !== '#/settings' && settingsPage.value && !settingsPage.value.canLeave()) {
+    window.history.replaceState(null, '', '#/settings')
+    return
+  }
   const route = parseLogFeatureLocation(hash)
   if (route) {
     const serverId = route.serverId || (filters.value.serverId === 'all' ? 'main' : filters.value.serverId)
@@ -2350,6 +2141,10 @@ function shareBreakPercent(server) {
   return Math.round(Math.min(100, Math.max(0, (broken / total) * 100)))
 }
 
+function sharePlacePercent(server) {
+  return Number(server?.totalCount || 0) > 0 ? 100 - shareBreakPercent(server) : 0
+}
+
 function shareCountTotal(items) {
   return asArray(items).reduce((total, item) => total + Number(item?.count || 0), 0)
 }
@@ -2488,6 +2283,7 @@ function toggleAllImportFileSelection(checked) {
           <span class="share-v2-score-unit">次方块行为</span>
           <div
             class="share-v2-score-bar"
+            :class="{ 'is-empty': !selectedShareServer.totalCount }"
             :style="{ '--break-percent': `${shareBreakPercent(selectedShareServer)}%` }"
             aria-label="破坏与放置行为占比"
           >
@@ -2504,7 +2300,7 @@ function toggleAllImportFileSelection(checked) {
             <span>
               <i class="is-placed"></i>
               放置
-              <b>{{ 100 - shareBreakPercent(selectedShareServer) }}%</b>
+              <b>{{ sharePlacePercent(selectedShareServer) }}%</b>
               <small>{{ formatNumber(selectedShareServer.placedCount) }}</small>
             </span>
           </div>
@@ -3125,7 +2921,7 @@ function toggleAllImportFileSelection(checked) {
             <div class="ranking-v2-metric is-placed">
               <span>放置</span>
               <strong>{{ formatNumber(player.placedCount) }}</strong>
-              <small>{{ 100 - shareBreakPercent(player) }}%</small>
+              <small>{{ sharePlacePercent(player) }}%</small>
             </div>
             <div class="ranking-v2-mobile-breakdown">
               <div class="ranking-v2-mobile-values">
@@ -3135,7 +2931,7 @@ function toggleAllImportFileSelection(checked) {
                 </span>
                 <span>
                   放置 <b>{{ formatNumber(player.placedCount) }}</b>
-                  <small>{{ 100 - shareBreakPercent(player) }}%</small>
+                  <small>{{ sharePlacePercent(player) }}%</small>
                 </span>
               </div>
               <div
@@ -3166,221 +2962,7 @@ function toggleAllImportFileSelection(checked) {
 
   <AdminLayout v-else :active="activeAdminPage" :account="currentAdmin" :server-time="serverTimeDisplay" @navigate="navigateAdmin" @logout="logout">
   <main class="app-shell">
-    <section v-if="currentView === 'settingsPage'" class="result-page">
-      <div class="admin-settings-actions">
-          <button class="primary-button" type="button" :disabled="settingsSaving || settingsLoading || !chatSettingsReady" @click="saveSyncConfig">
-            <Save :size="18" />
-            <span>{{ settingsSaving ? '保存中' : '保存设置' }}</span>
-          </button>
-      </div>
-
-      <p v-if="error" class="notice error">{{ error }}</p>
-      <p v-if="importMessage" class="notice success">{{ importMessage }}</p>
-
-      <div v-if="syncConfig" class="settings-grid">
-        <article class="panel data-maintenance-panel">
-          <div class="panel-title">
-            <h2>数据维护</h2>
-            <span>手动复制和解析 CSV</span>
-          </div>
-          <div class="data-maintenance-grid">
-            <div v-for="server in serverOptions" :key="server.serverId" class="data-maintenance-card">
-              <div>
-                <strong>{{ server.serverName }}</strong>
-              </div>
-              <div class="data-maintenance-actions">
-                <button class="primary-button" type="button" @click="openSyncPage(server.serverId)">
-                  <Download :size="17" />
-                  <span>前往复制 CSV {{ server.serverName }}</span>
-                </button>
-                <button class="secondary-button" type="button" @click="openImportPage(server.serverId)">
-                  <Database :size="17" />
-                  <span>前往解析 {{ server.serverName }}</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </article>
-
-        <article class="panel wide">
-          <div class="panel-title"><h2>SMB 服务器连接（只读）</h2></div>
-          <div class="settings-form">
-            <label>
-              <span>主机地址</span>
-              <input type="text" v-model="syncConfig.smbHost" placeholder="例: 192.168.1.100" />
-            </label>
-            <label>
-              <span>端口</span>
-              <input type="number" v-model.number="syncConfig.smbPort" placeholder="445" />
-            </label>
-            <label>
-              <span>域</span>
-              <input type="text" v-model="syncConfig.smbDomain" placeholder="可留空" />
-            </label>
-            <label>
-              <span>用户名</span>
-              <input type="text" v-model="syncConfig.smbUsername" placeholder="SMB 用户名" />
-            </label>
-            <div class="admin-password-setting">
-              <label for="smb-password">密码</label>
-              <div class="password-field">
-                <input id="smb-password" :type="showSmbPassword ? 'text' : 'password'" v-model="syncConfig.smbPassword" placeholder="留空则不修改" />
-                <button type="button" class="icon-button ghost password-toggle" :aria-label="showSmbPassword ? '隐藏 SMB 密码' : '显示 SMB 密码'" :title="showSmbPassword ? '隐藏密码' : '显示密码'" :aria-pressed="showSmbPassword" aria-controls="smb-password" @click="showSmbPassword = !showSmbPassword">
-                  <EyeOff v-if="showSmbPassword" :size="16" />
-                  <Eye v-else :size="16" />
-                </button>
-              </div>
-            </div>
-            <label>
-              <span>共享名</span>
-              <input type="text" v-model="syncConfig.smbShare" placeholder="例: share 或 data（Windows 共享文件夹名称）" />
-            </label>
-            <p class="settings-hint">共享名是 Windows 上共享的文件夹名称，右键文件夹 → 属性 → 共享 中可以看到。如果其它设备用 \\IP 访问，共享名就是 IP 后的部分。</p>
-            <p class="settings-hint">连接为只读模式，不会修改或删除远程服务器上的文件。</p>
-            <div class="settings-actions">
-              <button class="secondary-button" type="button" :disabled="smbTesting" @click="testSmbConnection">
-                <RefreshCw :size="16" :class="{ spin: smbTesting }" />
-                <span>{{ smbTesting ? '测试中...' : '测试连接' }}</span>
-              </button>
-            </div>
-          </div>
-        </article>
-
-        <article class="panel wide">
-          <div class="panel-title">
-            <h2>AstrBot 插件密钥</h2>
-            <span>{{ astrbotKey?.headerName || 'X-Player-Stats-Key' }}</span>
-          </div>
-          <div class="settings-form">
-            <label class="wide-field">
-              <span>插件密钥</span>
-              <input type="text" :value="astrbotKeyLoading ? '加载中...' : (astrbotKey?.apiKey || '')" readonly />
-            </label>
-            <label>
-              <span>通用分享链接有效期（分钟）</span>
-              <input type="number" min="5" max="10080" step="1" v-model.number="syncConfig.shareTtlMinutes" />
-            </label>
-            <label>
-              <span>查日志链接有效期（分钟）</span>
-              <input type="number" min="5" max="10080" step="1" v-model.number="syncConfig.logQueryShareTtlMinutes" />
-            </label>
-            <p class="settings-hint">把这个密钥填到 AstrBot 插件配置的 api_key 中。插件只用它查询玩家统计，不需要管理员登录 token。</p>
-            <p class="settings-hint">普通成员的每小时查日志次数在 AstrBot 插件配置中调整；QQ群主和群管理员不受限制。</p>
-            <p class="settings-hint">两个链接有效期分别控制：通用有效期用于玩家信息和排行榜，查日志有效期仅用于服务器日志页面；范围均为 5 分钟到 7 天。</p>
-            <div class="settings-actions">
-              <button class="secondary-button" type="button" :disabled="astrbotKeyLoading || !astrbotKey?.apiKey" @click="copyAstrbotKey">
-                <FileText :size="16" />
-                <span>复制密钥</span>
-              </button>
-              <button class="table-action danger" type="button" :disabled="astrbotKeyResetting" @click="resetAstrbotKey">
-                <RefreshCw :size="16" :class="{ spin: astrbotKeyResetting }" />
-                <span>{{ astrbotKeyResetting ? '重置中' : '重置密钥' }}</span>
-              </button>
-            </div>
-          </div>
-        </article>
-
-        <SmbDirectorySettings v-for="source in syncConfig.sources" :key="source.id" :title="`${source.sourceName || source.sourceId} - SMB 目录`" v-model:enabled="source.enabled" v-model:directory="source.smbDirectory" v-model:file-glob="source.smbFileGlob" directory-placeholder="例: logs/main" glob-placeholder="例: player_actions_*.csv" :disabled="settingsSaving" :refresh-disabled="settingsDirty" :refreshing="Boolean(sourceFilesLoading[source.sourceId])" :files="sourceFiles[source.sourceId] || []" :listed="Boolean(sourceFiles[source.sourceId])" @refresh="loadSourceFiles(source.sourceId)" />
-
-        <GroupChatCopySettings ref="chatDirectorySettings" :disabled="settingsSaving" :preview-disabled="settingsDirty" />
-
-        <article class="panel wide">
-          <div class="panel-title"><h2>自动任务</h2></div>
-          <div class="settings-form">
-            <label class="toggle-label">
-              <input type="checkbox" v-model="syncConfig.skipToday" />
-              <span>默认跳过当天文件</span>
-            </label>
-            <p class="settings-hint">统一控制 CSV 自动同步、解析和群服聊天 TXT 自动同步，默认开启。</p>
-          </div>
-          <div class="auto-task-list">
-            <div v-for="task in syncConfig.autoTasks" :key="task.serverId" class="auto-task-row">
-              <div class="auto-task-server">
-                <strong>{{ task.serverName || task.serverId }}</strong>
-                <span>{{ task.serverId }}</span>
-              </div>
-              <div class="admin-schedule-control" :class="{ 'is-enabled': task.syncEnabled }">
-              <label class="toggle-label admin-schedule-toggle">
-                <input type="checkbox" role="switch" v-model="task.syncEnabled" />
-                <span>自动复制 CSV</span>
-              </label>
-              <label class="time-field">
-                <span>复制时间</span>
-                <input type="time" v-model="task.syncTime" :disabled="!task.syncEnabled" />
-              </label>
-              </div>
-              <div class="admin-schedule-control" :class="{ 'is-enabled': task.importEnabled }">
-              <label class="toggle-label admin-schedule-toggle">
-                <input type="checkbox" role="switch" v-model="task.importEnabled" />
-                <span>自动解析入库</span>
-              </label>
-              <label class="time-field">
-                <span>解析时间</span>
-                <input type="time" v-model="task.importTime" :disabled="!task.importEnabled" />
-              </label>
-              </div>
-            </div>
-          </div>
-          <GroupChatCopySchedule ref="chatScheduleSettings" :disabled="settingsSaving" />
-          <p class="settings-hint schedule-hint">建议先复制 CSV，再间隔 5-10 分钟解析入库；主服和 2服可以设置不同时间，避免任务同时抢占。</p>
-        </article>
-
-        <article class="panel wide">
-          <div class="panel-title">
-            <h2>自动任务日志</h2>
-            <span>{{ autoTaskLogs.length }} 条</span>
-          </div>
-          <div class="bulk-actions">
-            <button class="secondary-button" type="button" :disabled="autoTaskLogsLoading" @click="loadAutoTaskLogs">
-              <RefreshCw :size="16" :class="{ spin: autoTaskLogsLoading }" />
-              <span>{{ autoTaskLogsLoading ? '刷新中' : '刷新日志' }}</span>
-            </button>
-            <button class="table-action danger" type="button" :disabled="autoTaskLogsClearing || !autoTaskLogs.length" @click="clearAutoTaskLogs">
-              <Trash2 :size="15" />
-              <span>{{ autoTaskLogsClearing ? '清空中' : '一键清空' }}</span>
-            </button>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>时间</th>
-                  <th>任务</th>
-                  <th>状态</th>
-                  <th>扫描</th>
-                  <th>成功</th>
-                  <th>跳过</th>
-                  <th>失败</th>
-                  <th>文件</th>
-                  <th>日志</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="log in autoTaskLogs" :key="log.id">
-                  <td>{{ formatDateTime(log.createdAt) }}</td>
-                  <td>{{ log.taskLabel || log.serverName || '-' }}</td>
-                  <td>
-                    <span class="status-pill" :class="statusClass(log.status)">
-                      {{ statusLabel(log.status, ['SYNC', 'CHAT_SYNC'].includes(log.taskType) ? 'sync' : 'import') }}
-                    </span>
-                  </td>
-                  <td>{{ formatNumber(log.scannedFiles) }}</td>
-                  <td>{{ formatNumber(log.successFiles) }}</td>
-                  <td>{{ formatNumber(log.skippedFiles) }}</td>
-                  <td>{{ formatNumber(log.failedFiles) }}</td>
-                  <td class="file-detail-cell" :title="log.fileDetails">{{ log.fileDetails || '-' }}</td>
-                  <td class="message-cell">{{ log.message || '-' }}</td>
-                </tr>
-                <tr v-if="!autoTaskLogs.length">
-                  <td colspan="9" class="empty">{{ autoTaskLogsLoading ? '正在加载自动任务日志...' : '暂无自动任务日志' }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </article>
-      </div>
-      <div v-else class="empty-state"><p>{{ settingsLoading ? '加载中...' : '无法加载配置' }}</p></div>
-    </section>
+    <SettingsPage v-if="currentView === 'settingsPage'" ref="settingsPage" @unauthorized="handleApiError(new Error('登录已过期，请重新登录'))" />
 
     <section v-else-if="currentView === 'profilePage'" class="result-page">
       <div class="topbar">

@@ -9,15 +9,13 @@ import (
 )
 
 type Config struct {
+	DatabasePath          string
+	ServerHost            string
 	ServerPort            string
 	ZoneID                string
 	Location              *time.Location
 	AllowedOrigins        []string
 	AllowedOriginPatterns []string
-
-	DatasourceURL      string
-	DatasourceUsername string
-	DatasourcePassword string
 
 	AdminUsername     string
 	AdminPassword     string
@@ -49,15 +47,13 @@ func Load() Config {
 	}
 
 	return Config{
+		DatabasePath:          env("PLAYER_DATABASE_PATH", "./database/player.db"),
+		ServerHost:            env("SERVER_HOST", ""),
 		ServerPort:            env("SERVER_PORT", "8080"),
 		ZoneID:                zoneID,
 		Location:              location,
 		AllowedOrigins:        csvEnv("APP_CORS_ALLOWED_ORIGINS", "http://localhost:5173"),
 		AllowedOriginPatterns: csvEnv("APP_CORS_ALLOWED_ORIGIN_PATTERNS", "http://localhost:*,http://127.0.0.1:*,http://10.*:*,http://172.*:*,http://192.168.*:*"),
-
-		DatasourceURL:      env("PLAYER_STATS_DATASOURCE_URL", "jdbc:mysql://localhost:3306/player_stats?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&rewriteBatchedStatements=true&createDatabaseIfNotExist=true"),
-		DatasourceUsername: env("PLAYER_STATS_DATASOURCE_USERNAME", "root"),
-		DatasourcePassword: env("PLAYER_STATS_DATASOURCE_PASSWORD", "mysql"),
 
 		AdminUsername:     env("APP_ADMIN_USERNAME", "admin"),
 		AdminPassword:     env("APP_ADMIN_PASSWORD", "admin123456"),
@@ -74,11 +70,11 @@ func Load() Config {
 		SubFileGlob:               env("PLAYER_LOGS_SUB_FILE_GLOB", "player_actions_*.csv"),
 		MainEnabled:               boolEnv("PLAYER_LOGS_MAIN_ENABLED", true),
 		SubEnabled:                boolEnv("PLAYER_LOGS_SUB_ENABLED", true),
-		MaxFilesPerRun:            intEnv("PLAYER_LOGS_IMPORTER_MAX_FILES_PER_RUN", 1000),
-		XrayRetainedJobs:          intEnv("PLAYER_LOGS_XRAY_ANALYSIS_RETAINED_JOBS", 1),
+		MaxFilesPerRun:            1000,
+		XrayRetainedJobs:          1,
 		XrayTempDirectory:         env("PLAYER_LOGS_XRAY_TEMP_DIRECTORY", filepath.Join(os.TempDir(), "player-stats-xray")),
 		LiveLogSnapshotDirectory:  env("PLAYER_LOGS_LIVE_TEMP_DIRECTORY", filepath.Join(os.TempDir(), "player-stats-live-log-query")),
-		LiveLogSnapshotTTLSeconds: intEnv("PLAYER_LOGS_LIVE_CACHE_SECONDS", 120),
+		LiveLogSnapshotTTLSeconds: 120,
 	}
 }
 
@@ -91,10 +87,7 @@ type Source struct {
 }
 
 func (c Config) Sources() []Source {
-	sources := []Source{
-		{ID: "main", Name: c.MainName, Directory: c.MainDirectory, FileGlob: c.MainFileGlob, Enabled: c.MainEnabled},
-		{ID: "sub", Name: c.SubName, Directory: c.SubDirectory, FileGlob: c.SubFileGlob, Enabled: c.SubEnabled},
-	}
+	sources := c.ArchiveSources()
 	enabled := make([]Source, 0, len(sources))
 	for _, source := range sources {
 		if source.Enabled {
@@ -102,6 +95,15 @@ func (c Config) Sources() []Source {
 		}
 	}
 	return enabled
+}
+
+// ArchiveSources includes disabled sources so offline rebuild does not silently
+// omit existing local files when synchronization is disabled in deployment.
+func (c Config) ArchiveSources() []Source {
+	return []Source{
+		{ID: "main", Name: c.MainName, Directory: c.MainDirectory, FileGlob: c.MainFileGlob, Enabled: c.MainEnabled},
+		{ID: "sub", Name: c.SubName, Directory: c.SubDirectory, FileGlob: c.SubFileGlob, Enabled: c.SubEnabled},
+	}
 }
 
 func (c Config) SourceName(serverID string) string {

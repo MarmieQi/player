@@ -16,3 +16,6 @@
 *.conf text eol=lf
 Dockerfile text eol=lf
 *.md text eol=lf
+
+# Deployment scripts must stay executable by POSIX shells after checkout.
+*.sh text eol=lf

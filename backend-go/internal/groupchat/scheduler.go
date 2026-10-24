@@ -69,6 +69,19 @@ func (s *Scheduler) check(ctx context.Context, now time.Time) {
 	if s.seen[schedule.Time] {
 		return
 	}
+	if claim, ok := s.service.(interface {
+		claimScheduled(context.Context, time.Time) (context.Context, bool, error)
+	}); ok {
+		claimedCtx, claimed, err := claim.claimScheduled(ctx, now)
+		if err != nil {
+			s.logger.Warn("chat task claim failed", "error", err)
+			return
+		}
+		if !claimed {
+			return
+		}
+		ctx = claimedCtx
+	}
 	s.seen[schedule.Time] = true
 	job, err := s.service.Start(readCtx, schedule.SkipToday)
 	if err != nil {

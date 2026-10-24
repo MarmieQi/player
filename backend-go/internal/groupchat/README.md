@@ -2,19 +2,19 @@
 
 TXT 同步只复制原始文件，不导入统计。独立的群服聊天查询按需读取原文，不建立聊天内容数据库。
 
-- 配置：`group_chat_copy_config` 独立表；默认关闭。沿用系统已有的 SMB 主机、共享及账号设置。
+- 配置：`log_sources` 中独立的 TXT 来源；默认关闭。沿用系统已有的 SMB 主机、共享及账号设置。
 - 文件：仅复制配置目录的匹配 TXT（不递归）；目标为 `LogArchiveDirectory/chat`，保留文件名与原始字节。
 - 同步：复用 importer 的 SMB 列举、文件大小/修改时间对比、临时文件替换及复制任务引擎。任务状态和运行锁为独立实例。
-- 日期：从 `YYYY-MM-DD.txt` 提取日期；手动同步默认勾选“跳过当天文件”。自动任务读取 `sync_config.skip_today`，与 CSV 共用设置页的同一个开关，默认开启；TXT 不再保存独立的跳过当天配置。
+- 日期：从 `YYYY-MM-DD.txt` 提取日期；手动同步默认勾选“跳过当天文件”。自动任务读取 `ingest_policy.skip_today`，与 CSV 共用设置页的同一个开关，默认开启；TXT 不再保存独立的跳过当天配置。
 - 查询：`GET /api/admin/group-chat/files` 对比远端文件与本地副本，不读取聊天内容。
 - 复制：`POST /api/admin/group-chat/copy-jobs` 返回任务 ID，GET 同路径加 ID 读取进度。任务最多运行 30 分钟，内存保留最近 8 个复制任务。
 - 权限：所有接口要求管理员身份，插件密钥无权访问。
-- 前端：`GroupChatCopySettings.vue` 只提供 SMB 目录配置；`GroupChatCopyPage.vue`（`#/txt-copy`）负责手动复制、进度和文件列表。设置页的 CSV/TXT 目录卡片复用 `SmbDirectorySettings.vue`，只提供配置和文件列表预览。顶部“保存设置”编排各独立配置接口；手动执行仅在 TXT 同步页。
+- 前端：`SettingsSmbPanel.vue` 提供共用 SMB 连接与 CSV/TXT 目录配置；`GroupChatCopyPage.vue`（`#/txt-copy`）负责手动复制、进度和文件列表。设置页的 CSV/TXT 目录卡片复用 `SmbDirectorySettings.vue`，只提供配置和文件列表预览。设置页按 SMB、任务计划、分享、运行参数分组保存，SMB/任务计划的跨表修改使用事务；手动执行仅在 TXT 同步页。
 - 设置预览：`GET /api/admin/group-chat/directory-files` 和 CSV 的 `/api/config/source-files` 只读取已保存配置对应的远端元数据，按文件规则过滤，不读取同步状态或检查本地副本。未保存时禁用刷新，保存后清除旧预览；进入设置不主动连接 SMB。
 
 Docker 默认本机目录：`docker-data/synced-logs/chat`；容器内：`/data/synced-logs/chat`。不需要新增挂载或环境变量。
 
-自动任务：在设置页“自动任务”中配置 TXT 的启用状态和每日执行时间，并通过顶部“保存设置”统一保存（任务默认关闭，00:10）。接口为 `GET/PUT /api/admin/group-chat/copy-schedule`，只更新计划，不覆盖 SMB 目录或全局跳过当天配置。后台每 30 秒检查一次系统时区时间；同一天同一时间在进程内只触发一次，不补跑错过的时间。手动和自动任务使用同一个聊天复制服务实例，因此不会并发覆盖。日志写入现有自动任务日志，类型为 `CHAT_SYNC`；CSV 自动复制及解析计划保持独立。迁移会移除早期 TXT 独立的 `auto_skip_today` 列，以已有全局开关为准。
+自动任务：在设置页“自动任务”中配置 TXT 的启用状态和每日执行时间，并保存“自动任务”标签（任务默认关闭，00:10）。接口为 `GET/PUT /api/admin/group-chat/copy-schedule`，只更新计划，不覆盖 SMB 目录或全局跳过当天配置。后台每 30 秒检查一次系统时区时间；以计划、业务日期和执行时间组成数据库唯一键，同一天同一时间重启后也不会重复触发，不补跑错过的时间。手动和自动任务使用同一个聊天复制服务实例，因此不会并发覆盖。日志写入现有自动任务日志，类型为 `CHAT_SYNC`；CSV 自动复制及解析计划保持独立。迁移忽略早期 TXT 独立的 `auto_skip_today`，以已有全局开关为准。
 
 CSV 与 TXT 同步使用同一个 `FileSyncPage.vue` 和 `file-sync-model.js`，提供任务统计、逐文件状态合并、本地大小/修改时间对比与本地文件批量管理。各自控制器只持有接口、范围及任务生命周期。本地 TXT 元数据接口为 `GET /api/admin/group-chat/local-files`；批量删除为 `POST /api/admin/group-chat/local-files/delete`，仅能操作 chat 目录内匹配规则的普通文件，手动/定时同步运行时拒绝删除。不会删除远端文件或统计记录。
 
@@ -24,8 +24,10 @@ CSV 与 TXT 同步使用同一个 `FileSyncPage.vue` 和 `file-sync-model.js`，
 
 - 导航位于统计总览下方，路由 `#/group-chat`，仅管理员可访问。
 - `POST /api/admin/group-chat/query` 接收 `fromDate`、`toDate`、`player`、`keyword`。日期范围最多 31 天；玩家是 `<账号名>` 的完整匹配（不区分大小写），关键词是不区分大小写的整行字面包含匹配，两者取交集。格式异常行仍可按关键词找到。
-- 历史记录只读 `chat/YYYY-MM-DD.txt`；当天按需从 SMB 获取快照，忽略批量/自动任务的跳过当天设置。复用 importer 同一个 liveSnapshots 实例，TTL 使用 `PLAYER_LOGS_LIVE_CACHE_SECONDS`（默认 120 秒），合并并发刷新、过期先拉取再扫描、引用计数保护在读文件、统一清理。TXT 只复用缓存能力，不经过 CSV 表头验证或解析；活动文件末尾未换行的半条记录留到下一快照。读取失败不回退到旧的当天归档。
-- 读取固定文件长度，逐行筛选全部原文，之后按时间倒序分页，返回原文。界面使用纯文本插值而非 HTML。玩家补全来自本次日期范围的聊天账号，不调用统计玩家库。
+- 历史记录只读 `chat/YYYY-MM-DD.txt`；当天按需从 SMB 获取快照，忽略批量/自动任务的跳过当天设置。复用 importer 同一个 liveSnapshots 实例，TTL 使用 `runtime_settings.live_cache_seconds`（默认 120 秒），合并并发刷新、过期先拉取再扫描、引用计数保护在读文件、统一清理。TXT 只复用缓存能力，不经过 CSV 表头验证或解析；活动文件末尾未换行的半条记录留到下一快照。读取失败不回退到旧的当天归档。
+- 读取固定文件长度，逐行筛选全部原文，之后按时间倒序分页，返回原文。界面使用纯文本插值而非 HTML。玩家补全与日志查询、矿透分析共用 PlayerNameAutocomplete 及 `/api/stats/player-suggestions`，聊天使用 `serverId=all` 查询全服已解析玩家索引并去重；不依赖聊天查询结果。索引外账号仍可直接输入，聊天筛选本身继续读取 TXT 原文。
 - `GET /api/admin/group-chat/query/{snapshotId}?page=1&pageSize=100` 读取同一次查询的稳定结果；页大小 1–200，默认 100。分页快照 10 分钟到期，最多保留 8 份、合计 64 MB，定时清理；过期返回 410，需重新查询。
 - 同时最多 2 个扫描，单次最多读取 128 MB，单行最大 1 MB，结果最多 10 万行/16 MB（含元数据估算）；超过上限明确要求缩小查询范围，不静默截断。玩家补全最多保留 1 万个账号；文件缺失日期单独返回。单次 HTTP 查询最长 90 秒。
 - 生命周期：浏览器取消/离页会中止请求；后端扫描释放文件租约和并发名额。关闭查询服务会取消正在执行的扫描、清空分页结果并拒绝新的结果发布。单次查询取消不取消其他查询可能共用的文件刷新；共享缓存关闭时会取消刷新，失败刷新遗留的文件立即清理。前端按服务器时区推进当天日期，日期定时器在离页时销毁。玩家候选复制账号字符串，避免通过字符串切片保留整行正文。
+
+运行调优：缓存时长、每轮文件上限和矿透任务保留数独立持久化于 runtime_settings。MySQL 迁移工具在旧表缺失时继承旧环境变量，之后启动以数据库为准。保存值与当前运行值分别返回，重启后端后生效。

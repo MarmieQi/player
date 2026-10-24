@@ -408,7 +408,8 @@ func (s *Service) copyArchiveFiles(ctx context.Context, remoteFiles []RemoteLogF
 		archivedFiles = append(archivedFiles, toArchivedSMBFile(source, file))
 	}
 	sort.Slice(archivedFiles, func(i, j int) bool { return archivedFiles[i].Path < archivedFiles[j].Path })
-	for _, file := range limitFiles(archivedFiles, s.cfg.MaxFilesPerRun) {
+	processed := 0
+	for _, file := range archivedFiles {
 		if err := ctx.Err(); err != nil {
 			return results, err
 		}
@@ -426,6 +427,13 @@ func (s *Service) copyArchiveFiles(ctx context.Context, remoteFiles []RemoteLogF
 			results = appendResult(results, listener, skippedResult(source.ID, source.Name, file.Path, "跳过当天或未来的日志文件"))
 			continue
 		}
+		if info, e := os.Stat(file.Path); e == nil && info.Mode().IsRegular() && info.Size() == file.Size && info.ModTime().UnixMilli() == file.LastModified.UnixMilli() {
+			continue
+		}
+		if s.cfg.MaxFilesPerRun > 0 && processed >= s.cfg.MaxFilesPerRun {
+			break
+		}
+		processed++
 		copied, err := copyFile(file)
 		if err != nil {
 			results = appendResult(results, listener, failedResult(source.ID, source.Name, file.Path, err.Error()))

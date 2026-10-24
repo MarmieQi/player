@@ -12,14 +12,12 @@ TEMPLATE = (ROOT / ".env.example").read_text(encoding="utf-8")
 COMPOSE = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 KEYS = set(re.findall(r"^([A-Z][A-Z0-9_]*)=", TEMPLATE, re.M))
 REQUIRED = {
-    "MYSQL_PASSWORD": "fixture-user-password",
-    "MYSQL_ROOT_PASSWORD": "fixture-root-password",
     "APP_ADMIN_PASSWORD": "fixture-admin-password",
     "APP_ADMIN_JWT_SECRET": "fixture-jwt-secret-not-for-production",
 }
 
 
-def render(values):
+def render(values, filename="docker-compose.yml"):
     environment = os.environ.copy()
     for key in KEYS | {
         "COMPOSE_FILE", "COMPOSE_PROFILES", "COMPOSE_PROJECT_NAME",
@@ -32,7 +30,7 @@ def render(values):
         return subprocess.run([
             "docker", "compose", "--project-directory", str(ROOT),
             "--env-file", str(env_file), "-p", "player-config-check",
-            "-f", str(ROOT / "docker-compose.yml"), "config", "--format", "json",
+            "-f", str(ROOT / filename), "config", "--format", "json",
         ], cwd=ROOT, env=environment, capture_output=True, text=True, encoding="utf-8")
 
 
@@ -66,47 +64,31 @@ class ComposeConfigTests(unittest.TestCase):
             values = dict(re.findall(r"^([A-Z][A-Z0-9_]*)=(.*)$", TEMPLATE, re.M))
             self.assertNotEqual(render(values).returncode, 0)
 
-    def test_default_deployment_reuses_database_credentials(self):
+    def test_sqlite_deployment_has_only_application_services(self):
         services = self.config()
-        mysql = services["mysql"]["environment"]
+        self.assertEqual(set(services), {"backend", "frontend"})
         backend = services["backend"]["environment"]
-        self.assertEqual(mysql["MYSQL_PASSWORD"], backend["PLAYER_STATS_DATASOURCE_PASSWORD"])
-        self.assertEqual(mysql["MYSQL_USER"], backend["PLAYER_STATS_DATASOURCE_USERNAME"])
-        self.assertEqual(backend["PLAYER_STATS_DATASOURCE_URL"], "jdbc:mysql://mysql:3306/player_stats")
-        self.assertEqual(services["frontend"]["image"], "ghcr.io/marmieqi/player-frontend:latest")
-        self.assertEqual(services["backend"]["image"], "ghcr.io/marmieqi/player-backend:latest")
+        self.assertEqual(backend["PLAYER_DATABASE_PATH"], "/data/database/player.db")
+        self.assertFalse(any("MYSQL" in key or "DATASOURCE" in key for key in backend))
+        mounts = services["backend"]["volumes"]
+        self.assertEqual({v["target"] for v in mounts}, {"/data/database", "/data/synced-logs", "/data/temp"})
         self.assertEqual([p["published"] for p in services["frontend"]["ports"]], ["9493", "8843"])
 
-    def test_custom_values_keep_versions_paths_and_passwords_consistent(self):
-        password = "fixture $dollar # hash : colon"
-        tag = "1234567890abcdef"
-        services = self.config({
-            "MYSQL_PASSWORD": password, "MYSQL_DATABASE": "custom_stats", "MYSQL_USER": "custom_user",
-            "IMAGE_TAG": tag, "PUBLIC_PORT": "19493", "ADMIN_PORT": "18843",
-            "DATA_DIRECTORY": "./custom-data", "PLAYER_LOGS_LIVE_CACHE_SECONDS": "60",
-        })
-        backend = services["backend"]["environment"]
-        self.assertEqual(backend["PLAYER_STATS_DATASOURCE_PASSWORD"], password)
-        self.assertEqual(services["mysql"]["environment"]["MYSQL_PASSWORD"], password)
-        self.assertEqual(backend["PLAYER_STATS_DATASOURCE_URL"], "jdbc:mysql://mysql:3306/custom_stats")
-        self.assertEqual(backend["PLAYER_STATS_DATASOURCE_USERNAME"], "custom_user")
-        self.assertEqual(backend["PLAYER_LOGS_LIVE_CACHE_SECONDS"], "60")
-        for name in ["frontend", "backend"]:
-            self.assertTrue(services[name]["image"].endswith(":" + tag))
+    def test_custom_version_and_data_root(self):
+        services = self.config({"IMAGE_TAG": "fixture-sha", "DATA_DIRECTORY": "./custom-data", "PUBLIC_PORT": "19493", "ADMIN_PORT": "18843"})
+        for name in ["backend", "frontend"]:
+            self.assertTrue(services[name]["image"].endswith(":fixture-sha"))
+        for mount in services["backend"]["volumes"]:
+            self.assertTrue(Path(mount["source"]).resolve().is_relative_to((ROOT / "custom-data").resolve()))
         self.assertEqual([p["published"] for p in services["frontend"]["ports"]], ["19493", "18843"])
-        self.assertEqual(Path(services["mysql"]["volumes"][0]["source"]).resolve(), (ROOT / "custom-data/mysql").resolve())
-        self.assertIn('"${MYSQL_ROOT_PASSWORD}"', services["mysql"]["healthcheck"]["test"][1])
 
-    def test_retired_business_environment_is_not_forwarded(self):
-        services = self.config({
-            "PLAYER_LOGS_SMB_HOST": "retired-host",
-            "PLAYER_LOGS_SMB_PASSWORD": "retired-password",
-            "PLAYER_LOGS_SMB_DIRECTORY": "retired-directory",
-            "PLAYER_LOGS_IMPORTER_SKIP_TODAY": "false",
-        })
-        backend = services["backend"]["environment"]
-        self.assertFalse(any(key.startswith("PLAYER_LOGS_SMB_") for key in backend))
-        self.assertNotIn("PLAYER_LOGS_IMPORTER_SKIP_TODAY", backend)
+    def test_one_shot_migration_keeps_credentials_out_of_arguments(self):
+        result = render(REQUIRED | {"IMAGE_TAG": "fixture-sha", "MYSQL_PASSWORD": "fixture $secret # value", "MYSQL_USER": "fixture_user", "MYSQL_DATABASE": "fixture_db"}, "compose.migrate.yml")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        service = json.loads(result.stdout.replace("$$", "$"))["services"]["config-migrate"]
+        self.assertNotIn("fixture $secret", " ".join(service["command"]))
+        self.assertEqual(service["environment"]["MYSQL_PASSWORD"], "fixture $secret # value")
+        self.assertTrue(service["image"].endswith(":fixture-sha"))
 
     def test_forwarded_backend_environment_is_actually_read(self):
         services = self.config()

@@ -116,17 +116,28 @@ func (s *AutoTaskScheduler) launch(date string, task settings.AutoTaskSetting, k
 			delete(s.running, key)
 			s.mu.Unlock()
 		}()
-		if kind == "SYNC" {
-			s.runSync(task, skipToday)
+		claimCtx, cancel := context.WithTimeout(s.lifetime, 5*time.Second)
+		at, _ := time.ParseInLocation("2006-01-02 15:04", date+" "+scheduledTime, s.location)
+		runID, claimed, err := s.settings.ClaimTask(claimCtx, task.ServerID, kind, at)
+		cancel()
+		if err != nil {
+			s.logger.Warn("task claim failed", "error", err)
 			return
 		}
-		s.runImport(task, skipToday)
+		if !claimed {
+			return
+		}
+		if kind == "SYNC" {
+			s.runSync(task, skipToday, runID)
+			return
+		}
+		s.runImport(task, skipToday, runID)
 	}()
 }
 
-func (s *AutoTaskScheduler) runSync(task settings.AutoTaskSetting, skipToday bool) {
+func (s *AutoTaskScheduler) runSync(task settings.AutoTaskSetting, skipToday bool, runID int64) {
 	label := task.ServerName + "：自动复制 CSV"
-	ctx, cancel := context.WithTimeout(s.lifetime, 30*time.Minute)
+	ctx, cancel := context.WithTimeout(settings.WithRunID(s.lifetime, runID), 30*time.Minute)
 	defer cancel()
 	s.recordTask(ctx, task.ServerID, task.ServerName, "SYNC", label, "RUNNING", label+" 开始", nil)
 	result, err := s.importer.SyncFilesFromConfiguredSource(ctx, task.ServerID, skipToday, nil)
@@ -143,9 +154,9 @@ func (s *AutoTaskScheduler) runSync(task settings.AutoTaskSetting, skipToday boo
 	s.recordTask(ctx, task.ServerID, task.ServerName, "SYNC", label, status, message, &result)
 }
 
-func (s *AutoTaskScheduler) runImport(task settings.AutoTaskSetting, skipToday bool) {
+func (s *AutoTaskScheduler) runImport(task settings.AutoTaskSetting, skipToday bool, runID int64) {
 	label := task.ServerName + "：自动解析入库"
-	ctx, cancel := context.WithTimeout(s.lifetime, 30*time.Minute)
+	ctx, cancel := context.WithTimeout(settings.WithRunID(s.lifetime, runID), 30*time.Minute)
 	defer cancel()
 	s.recordTask(ctx, task.ServerID, task.ServerName, "IMPORT", label, "RUNNING", label+" 开始", nil)
 	result, err := s.importer.ImportFromConfiguredSource(ctx, task.ServerID, skipToday, nil)
@@ -163,7 +174,7 @@ func (s *AutoTaskScheduler) runImport(task settings.AutoTaskSetting, skipToday b
 }
 
 func (s *AutoTaskScheduler) recordConfig(ctx context.Context, message string) {
-	s.recordTask(ctx, "", "系统", "CONFIG", "自动任务配置", "INFO", message, nil)
+	s.logger.Info(message)
 }
 
 func (s *AutoTaskScheduler) recordTask(ctx context.Context, serverID, serverName, taskType, label, status, message string, result *ImportRunResult) {
@@ -178,13 +189,7 @@ func (s *AutoTaskScheduler) recordTask(ctx context.Context, serverID, serverName
 		failed = result.FailedFiles
 		details = formatAutoTaskFileDetails(result.Files)
 	}
-	_, err := s.importer.db.ExecContext(ctx, `
-		insert into auto_task_logs (
-			created_at, server_id, server_name, task_type, task_label, status, message, file_details,
-			scanned_files, success_files, skipped_files, failed_files
-		)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, time.Now().UTC(), serverID, serverName, taskType, label, status, message, details, scanned, success, skipped, failed)
+	err := s.settings.RecordTask(ctx, status, message, details, scanned, success, skipped, failed)
 	if err != nil {
 		s.logger.Warn("auto task log write failed", "error", err)
 	}

@@ -133,7 +133,9 @@ func (s *Server) xrayGroupMessagesWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	ctx := r.Context()
+	// The plugin only receives notifications. Keep reading control frames so
+	// disconnects cancel this loop and Ping can receive its matching Pong.
+	ctx := conn.CloseRead(r.Context())
 	pending, err := s.shareService.PendingXrayGroupMessages(ctx, 10)
 	if err != nil {
 		s.logger.Warn("load pending xray group messages failed", "error", err)

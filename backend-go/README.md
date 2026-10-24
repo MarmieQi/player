@@ -45,7 +45,7 @@ GET /api/stats/server-time
 项目根目录执行：
 
 ```powershell
-docker compose up -d --build
+docker compose up -d
 ```
 
-Compose 会构建当前目录的 Dockerfile，并通过 MySQL 服务名连接数据库。
+正式镜像使用纯 Go SQLite 驱动，不需要 CGO 或 MySQL 服务。数据库位于 `/data/database/player.db`，挂载整个目录。版本迁移见根目录 SQLITE-MIGRATION.md。

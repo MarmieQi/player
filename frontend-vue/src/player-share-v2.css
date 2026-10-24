@@ -231,6 +231,10 @@
   min-width: 0;
 }
 
+.share-v2-score-bar.is-empty span {
+  background: rgba(151, 164, 185, 0.24);
+}
+
 .share-v2-score-bar .is-broken {
   background: #f59b4e;
 }

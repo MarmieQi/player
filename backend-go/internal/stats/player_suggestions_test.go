@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"io"
+	"player-stats-backend-go/internal/storage"
 	"strings"
 	"testing"
 )
@@ -32,16 +33,16 @@ func (c *suggestionConn) QueryContext(ctx context.Context, query string, args []
 	if args[0].Value != "server2" {
 		c.c.t.Fatalf("wrong server: %v", args)
 	}
-	if !strings.Contains(query, "player_server_profiles") || !strings.Contains(query, "escape '!'") || !strings.Contains(query, "limit ?") {
+	if !strings.Contains(query, "v_profiles") || !strings.Contains(query, "escape '!'") || !strings.Contains(query, "limit ?") {
 		c.c.t.Fatalf("query lacks directory constraints: %s", query)
 	}
 	if c.c.calls == 1 {
-		if args[1].Value != "Lc!_%" || args[2].Value != int64(10) {
+		if args[1].Value != "lc!_%" || args[2].Value != int64(10) {
 			c.c.t.Fatalf("prefix arguments: %v", args)
 		}
 		return &suggestionRows{names: []string{"Lc_One", "Lc_Two"}}, nil
 	}
-	if !strings.Contains(query, "not like") || args[1].Value != "%Lc!_%" || args[2].Value != "Lc!_%" || args[3].Value != int64(8) {
+	if !strings.Contains(query, "not like") || args[1].Value != "%lc!_%" || args[2].Value != "lc!_%" || args[3].Value != int64(8) {
 		c.c.t.Fatalf("substring arguments: %v, %s", args, query)
 	}
 	return &suggestionRows{names: []string{"OtherLc_Three"}}, nil
@@ -67,7 +68,7 @@ func TestPlayerSuggestionsScopeOrderingAndLiteralWildcard(t *testing.T) {
 	connector := &suggestionConnector{t: t}
 	db := sql.OpenDB(connector)
 	defer db.Close()
-	service := &Service{db: db}
+	service := &Service{db: storage.WrapReadOnly(db)}
 	names, err := service.PlayerSuggestions(context.Background(), " server2 ", " Lc_ ")
 	if err != nil {
 		t.Fatal(err)
@@ -78,7 +79,7 @@ func TestPlayerSuggestionsScopeOrderingAndLiteralWildcard(t *testing.T) {
 }
 func TestPlayerSuggestionsValidateBeforeDatabaseAccess(t *testing.T) {
 	service := &Service{}
-	for _, server := range []string{"", "all", "total", strings.Repeat("x", 65)} {
+	for _, server := range []string{"", "total", strings.Repeat("x", 65)} {
 		if _, err := service.PlayerSuggestions(context.Background(), server, "Alex"); err == nil {
 			t.Fatalf("accepted invalid server %q", server)
 		}

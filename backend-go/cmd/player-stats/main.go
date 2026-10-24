@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -24,13 +26,19 @@ import (
 
 func main() {
 	cfg := config.Load()
+	release, lockErr := storage.ProcessLock(cfg.DatabasePath)
+	if lockErr != nil {
+		fmt.Fprintln(os.Stderr, lockErr)
+		os.Exit(1)
+	}
+	defer release()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	startupCtx, startupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer startupCancel()
 	db, err := storage.Open(startupCtx, cfg)
 	if err != nil {
-		logger.Error("mysql connection failed", "error", err)
+		logger.Error("SQLite connection failed", "error", err)
 		os.Exit(1)
 	}
 	defer db.Close()
@@ -42,6 +50,39 @@ func main() {
 		logger.Error("default config initialization failed", "error", err)
 		os.Exit(1)
 	}
+	cfg, err = settings.InitializeRuntime(startupCtx, db, cfg)
+	if err != nil {
+		logger.Error("runtime configuration failed", "error", err)
+		os.Exit(1)
+	}
+	logger.Info("runtime parameters loaded", "liveCacheSeconds", cfg.LiveLogSnapshotTTLSeconds, "maxFilesPerRun", cfg.MaxFilesPerRun, "xrayRetainedJobs", cfg.XrayRetainedJobs)
+	instanceID, err := storage.InstanceID(startupCtx, db)
+	if err != nil {
+		logger.Error("database identity failed", "error", err)
+		return
+	}
+	cfg.AdminJWTIssuer = cfg.AdminJWTIssuer + ":" + instanceID
+	if len(os.Args) > 1 {
+		if os.Args[1] != "rebuild" {
+			logger.Error("unknown command")
+			os.Exit(2)
+		}
+		rebuildCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		service := importer.NewService(db, cfg, settings.NewService(db, cfg))
+		defer service.CloseLiveLogSnapshots()
+		if err := service.Rebuild(rebuildCtx, nil); err != nil {
+			logger.Error("rebuild failed; progress retained", "error", err)
+			os.Exit(1)
+		}
+		logger.Info("rebuild complete")
+		return
+	}
+	needsRebuild, err := storage.RequiresRebuild(startupCtx, db)
+	if err != nil || needsRebuild {
+		logger.Error("database requires offline rebuild before server startup", "error", err)
+		os.Exit(1)
+	}
 	authService := auth.NewService(db, cfg)
 	if err := authService.EnsureAdmin(startupCtx); err != nil {
 		logger.Error("admin initialization failed", "error", err)
@@ -50,6 +91,10 @@ func main() {
 	settingsService := settings.NewService(db, cfg)
 	statsService := stats.NewService(db, cfg)
 	importService := importer.NewService(db, cfg, settingsService)
+	if err := importService.RecoverTaskRuns(startupCtx); err != nil {
+		logger.Error("task recovery failed", "error", err)
+		os.Exit(1)
+	}
 	importJobs := importer.NewJobService(importService)
 	defer importJobs.Close()
 	logQueryService := importer.NewLogQueryService(importService)
@@ -71,7 +116,7 @@ func main() {
 
 	app := httpapi.NewServer(cfg, logger, authService, settingsService, shareService, importService, importJobs, logQueryService, xrayService, statsService, chatCopyService, chatQueryService)
 	server := &http.Server{
-		Addr:              ":" + cfg.ServerPort,
+		Addr:              net.JoinHostPort(cfg.ServerHost, cfg.ServerPort),
 		Handler:           app.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

@@ -12,6 +12,7 @@ permissions:
 
 env:
   BACKEND_IMAGE: ghcr.io/marmieqi/player-backend
+  MIGRATOR_IMAGE: ghcr.io/marmieqi/player-config-migrate
   FRONTEND_IMAGE: ghcr.io/marmieqi/player-frontend
 
 jobs:
@@ -55,10 +56,18 @@ jobs:
       - name: Race checks
         env:
           CGO_ENABLED: "1"
-        run: go test -race ./internal/importer ./internal/groupchat
+        run: go test -race ./internal/storage ./internal/settings ./internal/importer ./internal/groupchat ./internal/share ./internal/httpapi
 
       - name: Build
-        run: go build -trimpath -o player-stats-backend ./cmd/player-stats
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          go build -trimpath -o player-stats-backend ./cmd/player-stats
+          go build -trimpath -o config-migrate ./cmd/config-migrate
+          if go list -deps ./cmd/player-stats | grep -q 'github.com/go-sql-driver/mysql'; then
+            echo 'MySQL driver leaked into the runtime server'
+            exit 1
+          fi
 
   frontend-vue:
     name: Vue frontend
@@ -99,6 +108,8 @@ jobs:
       - name: Check deployment configuration
         run: |
           python3 scripts/check-compose.py
+          sh -n scripts/migrate-sqlite.sh
+          python3 scripts/check-sqlite-migration.py
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -130,3 +141,12 @@ jobs:
             ${{ env.FRONTEND_IMAGE }}:latest
             ${{ env.FRONTEND_IMAGE }}:main
             ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+
+      - name: Build one-shot migration image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend-go
+          file: ./backend-go/Dockerfile.migrate
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: |
+            ${{ env.MIGRATOR_IMAGE }}:${{ github.sha }}

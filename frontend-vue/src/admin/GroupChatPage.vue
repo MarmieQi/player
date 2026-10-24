@@ -28,10 +28,6 @@ const lifecycle = new AbortController()
 
 function updateToday() { if (serverClock) today.value = serverDateAt(serverClock, clockReceivedAt) }
 
-async function suggestions(query) {
-  const key = query.toLowerCase()
-  return (result.value?.players || []).filter(name => name.toLowerCase().includes(key)).slice(0, 12)
-}
 function stop() { ++version; abort?.abort(); loading.value = false }
 function clear() {
 	updateToday()
@@ -87,7 +83,7 @@ onUnmounted(() => { disposed = true; stop(); lifecycle.abort(); clearInterval(da
       <div class="chat-filter-grid">
         <label><span>开始日期</span><input v-model="fromDate" type="date" required :max="today" :disabled="initializing" /></label>
         <label><span>结束日期</span><input v-model="toDate" type="date" required :min="fromDate" :max="today" :disabled="initializing" /></label>
-        <PlayerNameAutocomplete v-model="player" :server-id="result?.snapshotId || 'chat'" :request-suggestions="suggestions" />
+        <PlayerNameAutocomplete v-model="player" server-id="all" />
         <label><span>关键字</span><input v-model="keyword" type="search" maxlength="256" placeholder="详细信息关键字" /></label>
       </div>
       <div class="chat-search-actions">

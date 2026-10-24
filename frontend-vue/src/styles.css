@@ -1670,58 +1670,6 @@ h2 {
   font-weight: 800;
 }
 
-.auto-task-list {
-  display: grid;
-  gap: 10px;
-}
-
-.auto-task-row {
-  display: grid;
-  grid-template-columns: minmax(130px, 0.9fr) minmax(150px, 1fr) minmax(130px, 0.8fr) minmax(160px, 1fr) minmax(130px, 0.8fr);
-  gap: 10px;
-  align-items: center;
-  padding: 12px;
-  border: 1px solid #e5edf5;
-  border-radius: 8px;
-  background: #fbfcfe;
-}
-
-.auto-task-server {
-  display: grid;
-  gap: 3px;
-}
-
-.auto-task-server strong {
-  font-size: 14px;
-}
-
-.auto-task-server span,
-.time-field span {
-  color: #667085;
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.time-field {
-  display: grid;
-  gap: 5px;
-}
-
-.time-field input {
-  width: 100%;
-  min-width: 0;
-  padding: 0.5rem 0.75rem;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  background: #f8fafc;
-  color: #1e293b;
-  font-size: 0.92rem;
-}
-
-.schedule-hint {
-  margin-top: 10px;
-}
-
 .table-wrap {
   width: 100%;
   overflow-x: auto;
@@ -2463,11 +2411,7 @@ th {
     justify-content: flex-start;
   }
 
-  .auto-task-row {
-    grid-template-columns: minmax(0, 1fr) minmax(140px, 0.8fr);
-  }
-
-  .xray-detail-header {
+.xray-detail-header {
     align-items: flex-start;
     flex-direction: column;
   }
@@ -2711,11 +2655,7 @@ th {
     font-size: 26px;
   }
 
-  .auto-task-row {
-    grid-template-columns: 1fr;
-  }
-
-  .rank-row,
+.rank-row,
   .trend-row,
   .import-row {
     gap: 8px;
@@ -2814,49 +2754,6 @@ th {
 }
 
 /* Settings page */
-.data-maintenance-panel {
-  min-height: 0;
-}
-
-.data-maintenance-grid {
-  display: grid;
-  gap: 10px;
-}
-
-.data-maintenance-card {
-  display: grid;
-  gap: 10px;
-  padding: 14px;
-  border: 1px solid #e5edf5;
-  border-radius: 8px;
-  background: #fbfcfe;
-}
-
-.data-maintenance-card > div:first-child {
-  display: grid;
-  gap: 4px;
-}
-
-.data-maintenance-card strong {
-  color: #17202a;
-  font-size: 16px;
-}
-
-.data-maintenance-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-start;
-  gap: 8px;
-}
-
-.data-maintenance-actions .primary-button,
-.data-maintenance-actions .secondary-button {
-  min-height: 40px;
-  width: auto;
-  padding: 0 16px;
-  font-weight: 800;
-}
-
 .settings-grid {
   display: flex;
   flex-direction: column;
@@ -2982,20 +2879,6 @@ th {
 }
 
 @media (max-width: 560px) {
-  .data-maintenance-card {
-    gap: 10px;
-    padding: 12px;
-  }
-
-  .data-maintenance-actions {
-    justify-content: stretch;
-  }
-
-  .data-maintenance-actions .primary-button,
-  .data-maintenance-actions .secondary-button {
-    width: 100%;
-  }
-
   .settings-grid {
     gap: 1rem;
   }

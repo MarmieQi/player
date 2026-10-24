@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { apiGet, apiPost, apiPostJson, apiPutJson } from '../src/api.js'
+import { apiGet, apiPost, apiPostJson, apiPutJson, apiDelete } from '../src/api.js'
 
 globalThis.window = { location: { origin: 'http://localhost' } }
 globalThis.localStorage = { getItem: () => '', removeItem: () => {} }
@@ -13,7 +13,7 @@ test('all query and settings requests forward their cancellation signal', async 
     assert.equal(options.signal, signal)
     return { ok: true, status: 200, json: async () => ({ success: true }) }
   }
-  for (const request of [apiGet, apiPost, apiPostJson, apiPutJson]) {
+  for (const request of [apiGet, apiPost, apiPostJson, apiPutJson, apiDelete]) {
     assert.deepEqual(await request('/api/test', {}, { signal }), { success: true })
   }
 })

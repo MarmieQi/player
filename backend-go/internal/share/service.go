@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"sort"
+	"player-stats-backend-go/internal/storage"
 	"strings"
 	"sync"
 	"time"
@@ -25,28 +25,25 @@ import (
 )
 
 type Service struct {
-	db                *sql.DB
-	cfg               config.Config
-	settings          *settings.Service
-	stats             *stats.Service
-	xray              *importer.XrayAnalysisService
-	logs              *importer.LogQueryService
-	mu                sync.Mutex
-	xraySubs          map[chan XrayGroupMessageResponse]struct{}
-	xrayMessages      map[int64]queuedXrayGroupMessage
-	nextXrayMessageID int64
+	db       *storage.DB
+	cfg      config.Config
+	settings *settings.Service
+	stats    *stats.Service
+	xray     *importer.XrayAnalysisService
+	logs     *importer.LogQueryService
+	mu       sync.Mutex
+	xraySubs map[chan XrayGroupMessageResponse]struct{}
 }
 
-func NewService(db *sql.DB, cfg config.Config, settingsService *settings.Service, statsService *stats.Service, xrayService *importer.XrayAnalysisService, logQueryService *importer.LogQueryService) *Service {
+func NewService(db *storage.DB, cfg config.Config, settingsService *settings.Service, statsService *stats.Service, xrayService *importer.XrayAnalysisService, logQueryService *importer.LogQueryService) *Service {
 	return &Service{
-		db:           db,
-		cfg:          cfg,
-		settings:     settingsService,
-		stats:        statsService,
-		xray:         xrayService,
-		logs:         logQueryService,
-		xraySubs:     map[chan XrayGroupMessageResponse]struct{}{},
-		xrayMessages: map[int64]queuedXrayGroupMessage{},
+		db:       db,
+		cfg:      cfg,
+		settings: settingsService,
+		stats:    statsService,
+		xray:     xrayService,
+		logs:     logQueryService,
+		xraySubs: map[chan XrayGroupMessageResponse]struct{}{},
 	}
 }
 
@@ -54,11 +51,6 @@ const xrayGroupMessageTTL = 10 * time.Minute
 const logQuerySnapshotPageRows = 200
 const defaultLogQueryPageSize = 50
 const maxLogQueryPageSize = 200
-
-type queuedXrayGroupMessage struct {
-	message   XrayGroupMessageResponse
-	createdAt time.Time
-}
 
 type ShareTokenResponse struct {
 	Token      string        `json:"token"`
@@ -224,14 +216,14 @@ func (s *Service) CreatePlayerToken(ctx context.Context, playerName string) (Sha
 
 	now := time.Now().UTC()
 	ttl := s.settings.ShareTTLMinutes(ctx)
-	token, err := s.generateUniqueToken(ctx, "player_share_tokens")
+	token, err := s.generateUniqueToken(ctx)
 	if err != nil {
 		return ShareTokenResponse{}, err
 	}
 	expiresAt := now.Add(time.Duration(ttl) * time.Minute)
 	_, err = s.db.ExecContext(ctx, `
-		insert into player_share_tokens (token, player_name, created_at, expires_at)
-		values (?, ?, ?, ?)
+		insert into share_links (kind,token,player_name,created_at,expires_at)
+        values ('player',?,?,?,?)
 	`, token, playerStats.PlayerName, now, expiresAt)
 	if err != nil {
 		return ShareTokenResponse{}, err
@@ -292,31 +284,40 @@ func (s *Service) CreateLogQueryToken(ctx context.Context, request importer.Publ
 	}
 	now := time.Now().UTC()
 	ttl := s.settings.LogQueryShareTTLMinutes(ctx)
-	token, err := s.generateUniqueToken(ctx, "log_query_share_tokens")
+	token, err := s.generateUniqueToken(ctx)
 	if err != nil {
 		return LogQueryShareTokenResponse{}, err
 	}
 	expiresAt := now.Add(time.Duration(ttl) * time.Minute)
+	compressedPages := [][]byte{}
+	for start := 0; start < len(rows); start += logQuerySnapshotPageRows {
+		if err := ctx.Err(); err != nil {
+			return LogQueryShareTokenResponse{}, err
+		}
+		end := min(start+logQuerySnapshotPageRows, len(rows))
+		compressed, err := compressLogQueryRows(rows[start:end])
+		if err != nil {
+			return LogQueryShareTokenResponse{}, err
+		}
+		compressedPages = append(compressedPages, compressed)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return LogQueryShareTokenResponse{}, err
 	}
 	defer tx.Rollback()
 	_, err = tx.ExecContext(ctx, `
-		insert into log_query_share_tokens (token, created_at, expires_at, payload_json)
-		values (?, ?, ?, ?)
+		insert into share_links (kind,token,created_at,expires_at,payload_json)
+        values ('log',?,?,?,?)
 	`, token, now, expiresAt, string(payload))
 	if err != nil {
 		return LogQueryShareTokenResponse{}, err
 	}
 	for start := 0; start < len(rows); start += logQuerySnapshotPageRows {
 		end := min(start+logQuerySnapshotPageRows, len(rows))
-		compressed, err := compressLogQueryRows(rows[start:end])
-		if err != nil {
-			return LogQueryShareTokenResponse{}, err
-		}
+		compressed := compressedPages[start/logQuerySnapshotPageRows]
 		_, err = tx.ExecContext(ctx, `
-			insert into log_query_share_pages (token, page_number, row_count, payload_gzip)
+			insert into share_pages (token, page_number, row_count, payload_gzip)
 			values (?, ?, ?, ?)
 		`, token, start/logQuerySnapshotPageRows+1, end-start, compressed)
 		if err != nil {
@@ -345,7 +346,7 @@ func (s *Service) LogQueryDetails(ctx context.Context, token string, page, pageS
 	var createdAt, expiresAt time.Time
 	err := s.db.QueryRowContext(ctx, `
 		select payload_json, created_at, expires_at
-		from log_query_share_tokens
+		from v_log_query_shares
 		where token = ?
 	`, token).Scan(&payload, &createdAt, &expiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -355,7 +356,7 @@ func (s *Service) LogQueryDetails(ctx context.Context, token string, page, pageS
 		return LogQueryShareDetailsResponse{}, err
 	}
 	if !expiresAt.After(time.Now().UTC()) {
-		_, _ = s.db.ExecContext(ctx, `delete from log_query_share_tokens where token = ?`, token)
+		_, _ = s.db.ExecContext(ctx, `delete from share_links where token = ?`, token)
 		return LogQueryShareDetailsResponse{}, auth.NewHTTPError(httpStatusGone, "链接已过期，请重新在群里查询")
 	}
 	var result importer.PublicCoordinateLogQueryView
@@ -366,7 +367,7 @@ func (s *Service) LogQueryDetails(ctx context.Context, token string, page, pageS
 	var snapshotPages, snapshotRows int
 	if err := s.db.QueryRowContext(ctx, `
 		select count(*), coalesce(sum(row_count), 0)
-		from log_query_share_pages where token = ?
+		from share_pages where token = ?
 	`, token).Scan(&snapshotPages, &snapshotRows); err != nil {
 		return LogQueryShareDetailsResponse{}, err
 	}
@@ -448,7 +449,7 @@ func decompressLogQueryRows(payload []byte) ([]importer.LogQueryRow, error) {
 
 func (s *Service) logQuerySnapshotRows(ctx context.Context, token string, fromPage, toPage int) ([]importer.LogQueryRow, error) {
 	pages, err := s.db.QueryContext(ctx, `
-		select payload_gzip from log_query_share_pages
+		select payload_gzip from share_pages
 		where token = ? and page_number between ? and ?
 		order by page_number
 	`, token, fromPage, toPage)
@@ -507,14 +508,14 @@ func (s *Service) CreateRankingToken(ctx context.Context, rankingType string, li
 
 	now := time.Now().UTC()
 	ttl := s.settings.ShareTTLMinutes(ctx)
-	token, err := s.generateUniqueToken(ctx, "ranking_share_tokens")
+	token, err := s.generateUniqueToken(ctx)
 	if err != nil {
 		return ShareTokenResponse{}, err
 	}
 	expiresAt := now.Add(time.Duration(ttl) * time.Minute)
 	_, err = s.db.ExecContext(ctx, `
-		insert into ranking_share_tokens (token, ranking_type, limit_count, from_date, to_date, created_at, expires_at)
-		values (?, ?, ?, ?, ?, ?, ?)
+		insert into share_links (kind,token,ranking_type,limit_count,from_date,to_date,created_at,expires_at)
+        values ('ranking',?,?,?,?,?,?,?)
 	`, token, normalizedType, limit, dateArg(effectiveFrom), dateArg(effectiveTo), now, expiresAt)
 	if err != nil {
 		return ShareTokenResponse{}, err
@@ -582,7 +583,7 @@ func (s *Service) rankingAvailableDateRange(ctx context.Context) (*time.Time, *t
 	var earliest, latest sql.NullTime
 	err := s.db.QueryRowContext(ctx, `
 		select min(log_date), max(log_date)
-		from imported_server_log_files
+		from v_import_files
 		where log_date is not null
 	`).Scan(&earliest, &latest)
 	if err != nil {
@@ -594,7 +595,7 @@ func (s *Service) rankingAvailableDateRange(ctx context.Context) (*time.Time, *t
 
 	err = s.db.QueryRowContext(ctx, `
 		select min(stat_date), max(stat_date)
-		from player_server_daily_stats
+		from v_daily_stats
 	`).Scan(&earliest, &latest)
 	if err != nil {
 		return nil, nil, err
@@ -665,7 +666,7 @@ func (s *Service) SendXrayToGroup(ctx context.Context, request XrayGroupSendRequ
 	now := time.Now().UTC()
 	ttl := normalizeXrayTTL(request.TTLMinutes)
 	expiresAt := now.Add(time.Duration(ttl) * time.Minute)
-	token, err := s.generateUniqueToken(ctx, "xray_share_tokens")
+	token, err := s.generateUniqueToken(ctx)
 	if err != nil {
 		return XrayGroupSendResponse{}, err
 	}
@@ -685,14 +686,19 @@ func (s *Service) SendXrayToGroup(ctx context.Context, request XrayGroupSendRequ
 	if err != nil {
 		return XrayGroupSendResponse{}, err
 	}
-	_, err = s.db.ExecContext(ctx, `
-		insert into xray_share_tokens (token, server_id, player_name, created_at, expires_at, payload_json)
-		values (?, ?, ?, ?, ?, ?)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return XrayGroupSendResponse{}, err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `
+		insert into share_links (kind,token,server_id,player_name,created_at,expires_at,payload_json)
+        values ('xray',?,?,?,?,?,?)
 	`, token, snapshot.serverID, snapshot.player.PlayerName, now, expiresAt, string(payload))
 	if err != nil {
 		return XrayGroupSendResponse{}, err
 	}
-	messageID := s.nextXrayGroupMessageID()
+	messageID := int64(0)
 	response := XrayGroupSendResponse{
 		MessageID:  messageID,
 		SharePath:  sharePath,
@@ -705,7 +711,7 @@ func (s *Service) SendXrayToGroup(ctx context.Context, request XrayGroupSendRequ
 		ExpiresAt:  expiresAt,
 		TTLMinutes: ttl,
 	}
-	s.enqueueXrayGroupMessage(XrayGroupMessageResponse{
+	message := XrayGroupMessageResponse{
 		ID:                         messageID,
 		SharePath:                  sharePath,
 		ServerID:                   response.ServerID,
@@ -720,7 +726,17 @@ func (s *Service) SendXrayToGroup(ctx context.Context, request XrayGroupSendRequ
 		ToTime:                     localDateTimePtr(&snapshot.toTime),
 		ExpiresAt:                  expiresAt,
 		TTLMinutes:                 ttl,
-	})
+	}
+	messageID, err = enqueueXrayGroupMessage(ctx, tx, message)
+	if err != nil {
+		return XrayGroupSendResponse{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return XrayGroupSendResponse{}, err
+	}
+	message.ID = messageID
+	s.publishXrayGroupMessage(message)
+	response.MessageID = messageID
 	return response, nil
 }
 
@@ -743,19 +759,33 @@ func (s *Service) SubscribeXrayGroupMessages(buffer int) (<-chan XrayGroupMessag
 	return ch, unsubscribe
 }
 
-func (s *Service) nextXrayGroupMessageID() int64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.nextXrayMessageID++
-	return s.nextXrayMessageID
-}
-
-func (s *Service) enqueueXrayGroupMessage(message XrayGroupMessageResponse) {
+// enqueueXrayGroupMessage writes through the share transaction. Notifications
+// are published only after both the share and durable outbox have committed.
+func enqueueXrayGroupMessage(ctx context.Context, tx *storage.Tx, message XrayGroupMessageResponse) (int64, error) {
 	now := time.Now().UTC()
+	expires := now.Add(xrayGroupMessageTTL)
+	if message.ExpiresAt.Before(expires) {
+		expires = message.ExpiresAt
+	}
+	result, e := tx.ExecContext(ctx, `insert into notification_outbox(status,created_at,expires_at,payload_json) values('PENDING',?,?, '{}')`, now, expires)
+	if e != nil {
+		return 0, e
+	}
+	id, e := result.LastInsertId()
+	if e != nil {
+		return 0, e
+	}
+	message.ID = id
+	payload, e := json.Marshal(message)
+	if e != nil {
+		return 0, e
+	}
+	_, e = tx.ExecContext(ctx, `update notification_outbox set payload_json=? where id=?`, string(payload), id)
+	return id, e
+}
+func (s *Service) publishXrayGroupMessage(message XrayGroupMessageResponse) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pruneExpiredXrayMessagesLocked(now)
-	s.xrayMessages[message.ID] = queuedXrayGroupMessage{message: message, createdAt: now}
 	for ch := range s.xraySubs {
 		select {
 		case ch <- message:
@@ -763,58 +793,11 @@ func (s *Service) enqueueXrayGroupMessage(message XrayGroupMessageResponse) {
 		}
 	}
 }
-
-func (s *Service) pendingXrayGroupMessages(limit int) []XrayGroupMessageResponse {
-	now := time.Now().UTC()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.pruneExpiredXrayMessagesLocked(now)
-
-	items := make([]queuedXrayGroupMessage, 0, len(s.xrayMessages))
-	for _, item := range s.xrayMessages {
-		items = append(items, item)
-	}
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].createdAt.Equal(items[j].createdAt) {
-			return items[i].message.ID < items[j].message.ID
-		}
-		return items[i].createdAt.Before(items[j].createdAt)
-	})
-
-	result := make([]XrayGroupMessageResponse, 0, min(limit, len(items)))
-	for _, item := range items {
-		if len(result) >= limit {
-			break
-		}
-		result = append(result, item.message)
-	}
-	return result
-}
-
-func (s *Service) removeXrayGroupMessage(messageID int64) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.pruneExpiredXrayMessagesLocked(time.Now().UTC())
-	if _, ok := s.xrayMessages[messageID]; !ok {
-		return false
-	}
-	delete(s.xrayMessages, messageID)
-	return true
-}
-
-func (s *Service) pruneExpiredXrayMessagesLocked(now time.Time) {
-	for messageID, item := range s.xrayMessages {
-		if !item.createdAt.Add(xrayGroupMessageTTL).After(now) {
-			delete(s.xrayMessages, messageID)
-		}
-	}
-}
-
 func (s *Service) XrayDetails(ctx context.Context, token string) (XrayShareDetailsResponse, error) {
 	token = strings.TrimSpace(token)
 	var payload string
 	var expiresAt time.Time
-	err := s.db.QueryRowContext(ctx, `select payload_json, expires_at from xray_share_tokens where token = ?`, token).Scan(&payload, &expiresAt)
+	err := s.db.QueryRowContext(ctx, `select payload_json, expires_at from v_xray_shares where token = ?`, token).Scan(&payload, &expiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return XrayShareDetailsResponse{}, auth.NewHTTPError(httpStatusNotFound, "链接不存在")
 	}
@@ -833,7 +816,24 @@ func (s *Service) XrayDetails(ctx context.Context, token string) (XrayShareDetai
 
 func (s *Service) PendingXrayGroupMessages(ctx context.Context, limit int) ([]XrayGroupMessageResponse, error) {
 	limit = max(1, min(limit, 10))
-	return s.pendingXrayGroupMessages(limit), nil
+	rows, err := s.db.QueryContext(ctx, `select payload_json from notification_outbox where status='PENDING' and expires_at>? order by created_at,id limit ?`, time.Now(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []XrayGroupMessageResponse{}
+	for rows.Next() {
+		var payload string
+		if err := rows.Scan(&payload); err != nil {
+			return nil, err
+		}
+		var item XrayGroupMessageResponse
+		if err := json.Unmarshal([]byte(payload), &item); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 func (s *Service) MarkXrayGroupDelivery(ctx context.Context, messageID int64, success bool, errorMessage string) (XrayGroupDeliveryResponse, error) {
@@ -841,7 +841,15 @@ func (s *Service) MarkXrayGroupDelivery(ctx context.Context, messageID int64, su
 	if success {
 		status = "SENT"
 	}
-	if !s.removeXrayGroupMessage(messageID) {
+	result, err := s.db.ExecContext(ctx, `update notification_outbox set status=?,delivered_at=?,failure_message=? where id=? and status='PENDING' and expires_at>?`, status, time.Now(), errorMessage, messageID, time.Now())
+	if err != nil {
+		return XrayGroupDeliveryResponse{}, err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return XrayGroupDeliveryResponse{}, err
+	}
+	if count == 0 {
 		return XrayGroupDeliveryResponse{}, auth.NewHTTPError(httpStatusNotFound, "发送任务不存在或已过期")
 	}
 	return XrayGroupDeliveryResponse{MessageID: messageID, Status: status}, nil
@@ -938,11 +946,11 @@ func (s *Service) serverDetails(ctx context.Context, server stats.PlayerServerSt
 	if err != nil {
 		return ServerDetailsResponse{}, err
 	}
-	woods, err := s.countItems(ctx, server.ServerID, playerName, "player_server_log_file_wood_stats", "wood_type", "wood_count", catalog.WoodTypes)
+	woods, err := s.countItems(ctx, server.ServerID, playerName, "v_file_wood", "wood_type", "wood_count", catalog.WoodTypes)
 	if err != nil {
 		return ServerDetailsResponse{}, err
 	}
-	saplings, err := s.countItems(ctx, server.ServerID, playerName, "player_server_log_file_sapling_stats", "sapling_type", "sapling_count", catalog.SaplingTypes)
+	saplings, err := s.countItems(ctx, server.ServerID, playerName, "v_file_sapling", "sapling_type", "sapling_count", catalog.SaplingTypes)
 	if err != nil {
 		return ServerDetailsResponse{}, err
 	}
@@ -978,8 +986,8 @@ func withFirstJoinMilestone(items []MilestoneItem, firstSeenAt *apitype.LocalDat
 func (s *Service) milestoneItems(ctx context.Context, serverID, playerName string) ([]MilestoneItem, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		select m.milestone_type, m.first_seen_at, coalesce(m.detail, '')
-		from player_server_log_file_milestones m
-		join imported_server_log_files f on f.id = m.import_file_id
+		from v_file_milestones m
+		join v_import_files f on f.id = m.import_file_id
 		where f.server_id = ? and lower(m.player_name) = lower(?)
 		order by m.first_seen_at
 	`, serverID, playerName)
@@ -1029,8 +1037,8 @@ func (s *Service) milestoneItems(ctx context.Context, serverID, playerName strin
 func (s *Service) oreItems(ctx context.Context, serverID, playerName string) ([]OreItem, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		select o.ore_type, coalesce(sum(o.ore_count), 0)
-		from player_server_log_file_ore_stats o
-		join imported_server_log_files f on f.id = o.import_file_id
+		from v_file_ore o
+		join v_import_files f on f.id = o.import_file_id
 		where f.server_id = ? and lower(o.player_name) = lower(?)
 		group by o.ore_type
 	`, serverID, playerName)
@@ -1061,7 +1069,7 @@ func (s *Service) countItems(ctx context.Context, serverID, playerName, table, t
 	query := `
 		select t.` + typeColumn + `, coalesce(sum(t.` + countColumn + `), 0)
 		from ` + table + ` t
-		join imported_server_log_files f on f.id = t.import_file_id
+		join v_import_files f on f.id = t.import_file_id
 		where f.server_id = ? and lower(t.player_name) = lower(?)
 		group by t.` + typeColumn
 	rows, err := s.db.QueryContext(ctx, query, serverID, playerName)
@@ -1099,7 +1107,7 @@ func (s *Service) playerToken(ctx context.Context, token string) (playerTokenRow
 	var row playerTokenRow
 	err := s.db.QueryRowContext(ctx, `
 		select player_name, created_at, expires_at
-		from player_share_tokens
+		from v_player_shares
 		where token = ?
 	`, token).Scan(&row.playerName, &row.createdAt, &row.expiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1129,7 +1137,7 @@ func (s *Service) rankingToken(ctx context.Context, token string) (rankingTokenR
 	var fromDate, toDate sql.NullTime
 	err := s.db.QueryRowContext(ctx, `
 		select ranking_type, limit_count, from_date, to_date, created_at, expires_at
-		from ranking_share_tokens
+		from v_ranking_shares
 		where token = ?
 	`, token).Scan(&row.rankingType, &row.limit, &fromDate, &toDate, &row.createdAt, &row.expiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1151,34 +1159,27 @@ func (s *Service) rankingToken(ctx context.Context, token string) (rankingTokenR
 }
 
 func (s *Service) deleteExpiredTokens(ctx context.Context) error {
-	now := time.Now().UTC()
-	if _, err := s.db.ExecContext(ctx, `delete from player_share_tokens where expires_at < ?`, now); err != nil {
-		return err
-	}
-	if _, err := s.db.ExecContext(ctx, `delete from ranking_share_tokens where expires_at < ?`, now); err != nil {
-		return err
-	}
-	if _, err := s.db.ExecContext(ctx, `delete from log_query_share_tokens where expires_at < ?`, now); err != nil {
-		return err
-	}
-	if _, err := s.db.ExecContext(ctx, `delete from xray_share_tokens where expires_at < ?`, now); err != nil {
-		return err
-	}
-	return nil
+	return s.db.Write(ctx, func(tx *storage.Tx) error {
+		if _, e := tx.ExecContext(ctx, `delete from share_links where expires_at<?`, time.Now()); e != nil {
+			return e
+		}
+		_, e := tx.ExecContext(ctx, `delete from notification_outbox where expires_at<?`, time.Now())
+		return e
+	})
 }
 
 func (s *Service) CleanupExpiredTokens(ctx context.Context) error {
 	return s.deleteExpiredTokens(ctx)
 }
 
-func (s *Service) generateUniqueToken(ctx context.Context, table string) (string, error) {
+func (s *Service) generateUniqueToken(ctx context.Context) (string, error) {
 	for attempt := 0; attempt < 5; attempt++ {
 		token, err := randomToken(24)
 		if err != nil {
 			return "", err
 		}
 		var exists int
-		if err := s.db.QueryRowContext(ctx, `select count(*) from `+table+` where token = ?`, token).Scan(&exists); err != nil {
+		if err := s.db.QueryRowContext(ctx, `select count(*) from share_links where token = ?`, token).Scan(&exists); err != nil {
 			return "", err
 		}
 		if exists == 0 {
@@ -1219,7 +1220,7 @@ func dateArg(value *time.Time) any {
 	if value == nil {
 		return nil
 	}
-	return *value
+	return storage.Date(*value)
 }
 
 func apiDatePtr(value *time.Time) *apitype.Date {
