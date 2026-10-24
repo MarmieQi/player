@@ -63,14 +63,14 @@ func TestChatFiltersBeforePagingAndPagesStayStable(t *testing.T) {
 	}
 	service, path, request := queryFixture(t, text.String())
 	first, err := service.Search(context.Background(), request)
-	if err != nil || first.Total != 350 || len(first.Rows) != 100 || !strings.Contains(first.Rows[0], "record-349") {
+	if err != nil || first.Total != 350 || len(first.Rows) != 100 || !strings.Contains(first.Rows[0], "record-000") {
 		t.Fatalf("first: %#v %v", first, err)
 	}
 	if err := os.WriteFile(path, []byte("[2026-10-12 01:00:01] [主服][昵称]<Steve> new\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	second, err := service.Page(first.SnapshotID, 2, 100)
-	if err != nil || second.Total != 350 || !strings.Contains(second.Rows[0], "record-249") {
+	if err != nil || second.Total != 350 || !strings.Contains(second.Rows[0], "record-100") {
 		t.Fatalf("stable page: %#v %v", second, err)
 	}
 	if err := os.WriteFile(path, []byte(text.String()), 0600); err != nil {
@@ -84,6 +84,45 @@ func TestChatFiltersBeforePagingAndPagesStayStable(t *testing.T) {
 	service.now = func() time.Time { return first.ExpiresAt }
 	if _, err := service.Page(first.SnapshotID, 1, 100); err == nil {
 		t.Fatal("expired page accepted")
+	}
+}
+
+func TestChatSortsChronologicallyAcrossFilesAndPreservesEqualTimeOrder(t *testing.T) {
+	line := func(day, clock, body string) string {
+		return fmt.Sprintf("[%s %s] [主服][昵称]<Steve> %s", day, clock, body)
+	}
+	early := line("2026-10-12", "00:01:00", "early")
+	first := line("2026-10-12", "08:00:00", "same-time-first")
+	second := line("2026-10-12", "08:00:00", "same-time-second")
+	late := line("2026-10-12", "23:59:59", "late")
+	nextEarly := line("2026-10-13", "00:00:00", "next-day-early")
+	nextLate := line("2026-10-13", "08:00:00", "next-day-late")
+	service, path, request := queryFixture(t, strings.Join([]string{late, first, early, second}, "\n")+"\n")
+	nextPath := filepath.Join(filepath.Dir(path), "2026-10-13.txt")
+	if err := os.WriteFile(nextPath, []byte(nextLate+"\n"+nextEarly+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	day, _ := time.ParseInLocation("2006-01-02", request.FromDate, service.zone)
+	service.now = func() time.Time { return day.AddDate(0, 0, 1).Add(12 * time.Hour) }
+	service.files = func(context.Context, time.Time, time.Time) (queryFiles, error) {
+		return queryFiles{files: []queryFile{
+			{nextPath, "2026-10-13.txt", day.AddDate(0, 0, 1)},
+			{path, "2026-10-12.txt", day},
+		}, release: func() {}}, nil
+	}
+	request.ToDate = "2026-10-13"
+	result, err := service.Search(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{early, first, second, late, nextEarly, nextLate}
+	if strings.Join(result.Rows, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("unexpected chronological order: %v", result.Rows)
+	}
+	// Pagination must slice the globally sorted snapshot, including midnight.
+	page, err := service.Page(result.SnapshotID, 3, 2)
+	if err != nil || strings.Join(page.Rows, "\n") != strings.Join(want[4:], "\n") {
+		t.Fatalf("cross-date page order: %v %v", page.Rows, err)
 	}
 }
 

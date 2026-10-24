@@ -239,9 +239,9 @@ func scanChatFiles(ctx context.Context, files queryFiles, request QueryRequest, 
 	}
 	sort.SliceStable(result.rows, func(i, j int) bool {
 		if result.rows[i].at.Equal(result.rows[j].at) {
-			return result.rows[i].order > result.rows[j].order
+			return result.rows[i].order < result.rows[j].order
 		}
-		return result.rows[i].at.After(result.rows[j].at)
+		return result.rows[i].at.Before(result.rows[j].at)
 	})
 	sort.Strings(result.players)
 	if err := ctx.Err(); err != nil {
