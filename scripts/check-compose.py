@@ -67,6 +67,9 @@ class ComposeConfigTests(unittest.TestCase):
     def test_sqlite_deployment_has_only_application_services(self):
         services = self.config()
         self.assertEqual(set(services), {"backend", "frontend"})
+        for name, service in services.items():
+            self.assertEqual(service["image"], f"ghcr.io/marmieqi/player-{name}:latest")
+            self.assertEqual(service["pull_policy"], "always")
         backend = services["backend"]["environment"]
         self.assertEqual(backend["PLAYER_DATABASE_PATH"], "/data/database/player.db")
         self.assertFalse(any("MYSQL" in key or "DATASOURCE" in key for key in backend))

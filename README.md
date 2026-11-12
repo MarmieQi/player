@@ -32,7 +32,6 @@ chmod 600 .env
 
 ```bash
 docker compose config --quiet &&
-docker compose pull &&
 docker compose up -d
 
 docker compose ps
@@ -49,12 +48,11 @@ docker compose logs --tail=100 backend frontend
 
 ## 更新部署
 
-先确认本次 GitHub Actions 的前后端镜像均已发布成功。日常更新保留现有 `.env` 和 `docker-compose.yml`，只拉取应用镜像：
+先确认本次 GitHub Actions 的前后端镜像均已发布成功。前后端均配置了 `pull_policy: always`，执行 `up` 时会从 GHCR 拉取配置的镜像标签。已部署的服务器需先把两处拉取策略同步到自己的 `docker-compose.yml`，然后执行：
 
 ```bash
 cd /vol1/1000/docker/player
 docker compose config --quiet &&
-docker compose pull backend frontend &&
 docker compose up -d --no-deps backend frontend
 
 docker compose ps
