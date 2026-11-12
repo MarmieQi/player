@@ -23,7 +23,7 @@ CSV 与 TXT 同步使用同一个 `FileSyncPage.vue` 和 `file-sync-model.js`，
 ## 群服聊天查询
 
 - 导航位于统计总览下方，路由 `#/group-chat`，仅管理员可访问。
-- `POST /api/admin/group-chat/query` 接收 `fromDate`、`toDate`、`player`、`keyword`。日期范围最多 31 天；玩家是 `<账号名>` 的完整匹配（不区分大小写），关键词是不区分大小写的整行字面包含匹配，两者取交集。格式异常行仍可按关键词找到。
+- `POST /api/admin/group-chat/query` 接收 `fromDate`、`toDate`、`player`、`keyword`。玩家是 `<账号名>` 的完整匹配（不区分大小写），关键词是不区分大小写的整行字面包含匹配，两者取交集。格式异常行仍可按关键词找到。
 - 历史记录只读 `chat/YYYY-MM-DD.txt`；当天按需从 SMB 获取快照，忽略批量/自动任务的跳过当天设置。复用 importer 同一个 liveSnapshots 实例，TTL 使用 `runtime_settings.live_cache_seconds`（默认 120 秒），合并并发刷新、过期先拉取再扫描、引用计数保护在读文件、统一清理。TXT 只复用缓存能力，不经过 CSV 表头验证或解析；活动文件末尾未换行的半条记录留到下一快照。读取失败不回退到旧的当天归档。
 - 读取固定文件长度，逐行筛选全部原文，之后按时间从早到晚排序并分页，同一时间保持原文件中的先后顺序，返回原文。界面使用纯文本插值而非 HTML。玩家补全与日志查询、矿透分析共用 PlayerNameAutocomplete 及 `/api/stats/player-suggestions`，聊天使用 `serverId=all` 查询全服已解析玩家索引并去重；不依赖聊天查询结果。索引外账号仍可直接输入，聊天筛选本身继续读取 TXT 原文。
 - `GET /api/admin/group-chat/query/{snapshotId}?page=1&pageSize=200` 读取同一次查询的稳定结果；页大小 1–500，默认 200。分页快照 10 分钟到期，最多保留 8 份、合计 64 MB，定时清理；过期返回 410，需重新查询。

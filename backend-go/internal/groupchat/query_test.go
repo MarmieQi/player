@@ -57,6 +57,30 @@ func TestChatSearchWholeFileRawKeywordAndExactPlayer(t *testing.T) {
 	}
 }
 
+func TestChatSearchAcrossMoreThan31Days(t *testing.T) {
+	service, _, request := queryFixture(t, "[2026-10-12 00:00:00] [主服]<Steve> 书架\n")
+	request.FromDate = "2026-08-01"
+	request.Keyword = "书架"
+	files := service.files
+	service.files = func(ctx context.Context, from, to time.Time) (queryFiles, error) {
+		got, err := files(ctx, from, to)
+		if err != nil {
+			return queryFiles{}, err
+		}
+		path := filepath.Join(t.TempDir(), "2026-08-01.txt")
+		if err := os.WriteFile(path, []byte("[2026-08-01 00:00:00] [主服]<Steve> 书架\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		got.files = append(got.files, queryFile{path, "2026-08-01.txt", from})
+		return got, nil
+	}
+	result, err := service.Search(context.Background(), request)
+	if err != nil || result.Total != 2 || len(result.Rows) != 2 ||
+		!strings.HasPrefix(result.Rows[0], "[2026-08-01") || !strings.HasPrefix(result.Rows[1], "[2026-10-12") {
+		t.Fatalf("wide query: %+v %v", result, err)
+	}
+}
+
 func TestChatFiltersBeforePagingAndPagesStayStable(t *testing.T) {
 	var text strings.Builder
 	for index := 0; index < 350; index++ {
@@ -206,7 +230,7 @@ func TestChatSortsChronologicallyAcrossFilesAndPreservesEqualTimeOrder(t *testin
 
 func TestChatValidationCancellationAndRefreshFailure(t *testing.T) {
 	service, _, valid := queryFixture(t, "")
-	for _, request := range []QueryRequest{{FromDate: "bad", ToDate: valid.ToDate}, {FromDate: valid.FromDate, ToDate: "2026-10-13"}, {FromDate: "2026-09-01", ToDate: valid.ToDate}, {FromDate: valid.FromDate, ToDate: "2026-10-11"}} {
+	for _, request := range []QueryRequest{{FromDate: "bad", ToDate: valid.ToDate}, {FromDate: valid.FromDate, ToDate: "2026-10-13"}, {FromDate: valid.FromDate, ToDate: "2026-10-11"}} {
 		if _, err := service.Search(context.Background(), request); err == nil {
 			t.Fatalf("accepted %#v", request)
 		}

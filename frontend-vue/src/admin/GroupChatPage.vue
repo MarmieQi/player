@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, toRefs } from 'vue'
 import { Search, X } from 'lucide-vue-next'
 import { apiGet, apiPostJson } from '../api.js'
 import PlayerNameAutocomplete from './PlayerNameAutocomplete.vue'
@@ -8,18 +8,13 @@ import { DEFAULT_PAGE_SIZE } from './pagination.js'
 import { serverDateAt } from './server-date-clock.js'
 
 const endpoint = '/api/admin/group-chat/query'
+const props = defineProps({ state: { type: Object, required: true } })
+const emit = defineEmits(['unauthorized'])
+const { initialized, fromDate, toDate, player, keyword, result, searched, pageSize, sortOrder } = toRefs(props.state)
 const today = ref('')
-const fromDate = ref('')
-const toDate = ref('')
-const player = ref('')
-const keyword = ref('')
-const result = ref(null)
-const searched = ref(null)
 const loading = ref(false)
 const initializing = ref(true)
 const error = ref('')
-const pageSize = ref(DEFAULT_PAGE_SIZE)
-const sortOrder = ref('asc')
 const pages = computed(() => Math.max(1, Math.ceil((result.value?.total || 0) / (result.value?.pageSize || DEFAULT_PAGE_SIZE))))
 let abort
 let version = 0
@@ -31,6 +26,12 @@ const lifecycle = new AbortController()
 
 function updateToday() { if (serverClock) today.value = serverDateAt(serverClock, clockReceivedAt) }
 
+function reportError(err) {
+  if (disposed || err.name === 'AbortError') return
+  if (err.status === 401) emit('unauthorized', err)
+  else error.value = err.message
+}
+
 function stop() { ++version; abort?.abort(); loading.value = false }
 function clear() {
 	updateToday()
@@ -39,7 +40,6 @@ function clear() {
 }
 async function run(operation, criteria) {
   stop(); const current = version; abort = new AbortController(); loading.value = true; error.value = ''
-  if (criteria) { result.value = null; searched.value = criteria }
   try {
     const value = await operation(abort.signal)
     if (disposed || current !== version) return
@@ -48,10 +48,7 @@ async function run(operation, criteria) {
     sortOrder.value = value.sortOrder || 'asc'
     if (criteria) searched.value = criteria
   } catch (err) {
-    if (!disposed && current === version && err.name !== 'AbortError') {
-      error.value = err.message
-      if (err.status === 410) result.value = null
-    }
+    if (current === version) reportError(err)
   } finally { if (current === version) loading.value = false }
 }
 async function search() {
@@ -77,9 +74,13 @@ onMounted(async () => {
     serverClock = clock.serverTime; clockReceivedAt = Date.now()
     updateToday()
     dateTimer = setInterval(updateToday, 60000)
-    fromDate.value = today.value; toDate.value = today.value
-    await search()
-  } catch (err) { if (!disposed && err.name !== 'AbortError') error.value = err.message }
+    if (!initialized.value) {
+      initialized.value = true
+      fromDate.value = today.value
+      toDate.value = today.value
+      await search()
+    }
+  } catch (err) { reportError(err) }
   finally { initializing.value = false }
 })
 onUnmounted(() => { disposed = true; stop(); lifecycle.abort(); clearInterval(dateTimer) })

@@ -89,9 +89,6 @@ func (s *QueryService) validate(r QueryRequest) (time.Time, time.Time, error) {
 	if err != nil || to.Before(from) || to.After(today) {
 		return from, to, auth.NewHTTPError(400, "结束日期须不早于开始日期，且不能晚于今天")
 	}
-	if to.After(from.AddDate(0, 0, 30)) {
-		return from, to, auth.NewHTTPError(400, "一次最多查询 31 天")
-	}
 	if len(r.Player) > 256 || len(r.Keyword) > 1024 {
 		return from, to, auth.NewHTTPError(400, "玩家名或关键词过长")
 	}

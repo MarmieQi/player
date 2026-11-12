@@ -1,5 +1,6 @@
 <script setup>
-import { computed, defineAsyncComponent, onMounted, onUnmounted, ref } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { createGroupChatState } from './admin/group-chat-state.js'
 import { formatReportTimeRange } from './public-report-format.js'
 import { logActionOptions } from './admin/log-action-options.js'
 import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS, orderedPageRows } from './admin/pagination.js'
@@ -184,6 +185,10 @@ const players = ref([])
 const daily = ref([])
 const imports = ref([])
 const logQueryServerId = ref('main')
+const groupChatState = shallowRef(createGroupChatState())
+watch(authenticated, signedIn => {
+  if (!signedIn) groupChatState.value = createGroupChatState()
+})
 const logQueryMode = ref(LOG_QUERY_TYPE_COORDINATE)
 const lastLogQueryMode = ref(LOG_QUERY_TYPE_COORDINATE)
 const logQueryForms = ref(readSavedLogQueryForms())
@@ -3146,7 +3151,7 @@ function toggleAllImportFileSelection(checked) {
     </section>
 
     <GroupChatCopyPage v-else-if="currentView === 'txtCopyPage'" @settings="openSettingsPage" />
-    <GroupChatPage v-else-if="currentView === 'groupChatPage'" />
+    <GroupChatPage v-else-if="currentView === 'groupChatPage'" :state="groupChatState" @unauthorized="handleApiError" />
 
     <FileSyncPage v-else-if="currentView === 'syncPage'" :key="filters.serverId" extension="CSV" :scope-name="selectedServerName" :remote-files="remoteFiles" :local-files="syncLocalFiles" :job="syncJob" :loading="syncPageLoading" :starting="syncingFiles" :deleting="deletingLocalCsv" v-model:skip-today="syncSkipToday" :error="error" :message="importMessage" @refresh="loadSyncPageFiles" @start="startSyncJob" @delete="deleteSelectedLocalCsv">
       <template #scope><div class="admin-server-picker"><AdminSelect :model-value="filters.serverId" :options="adminServerOptions" label="任务服务器" caption="服务器" @update:model-value="openSyncPage" /></div></template>
