@@ -4,7 +4,7 @@
 
 services:
   backend:
-    image: ghcr.io/marmieqi/player-backend:${IMAGE_TAG:-latest}
+    image: ghcr.io/marmieqi/player-backend:latest
     pull_policy: always
     container_name: player-stats-backend
     restart: always
@@ -64,7 +64,7 @@ services:
       - "8080"
 
   frontend:
-    image: ghcr.io/marmieqi/player-frontend:${IMAGE_TAG:-latest}
+    image: ghcr.io/marmieqi/player-frontend:latest
     pull_policy: always
     container_name: player-stats-frontend
     restart: always

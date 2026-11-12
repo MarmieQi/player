@@ -13,7 +13,7 @@ GitHub Actions 在 `main` 分支检查通过后发布前后端镜像。服务器
 服务器部署文件分工：
 
 - `docker-compose.yml`：仓库维护的服务结构，不再填写服务器密码。
-- `.env`：服务器自己的端口、密码、JWT 密钥、数据目录和镜像标签，不提交 Git。
+- `.env`：服务器自己的端口、密码、JWT 密钥和数据目录，不提交 Git。
 - [.env.example](.env.example)：每项均有中文说明的模板，只在首次安装时复制。
 - `docker-data/`：数据库、归档 CSV 和临时任务文件。
 
@@ -48,7 +48,7 @@ docker compose logs --tail=100 backend frontend
 
 ## 更新部署
 
-先确认本次 GitHub Actions 的前后端镜像均已发布成功。前后端均配置了 `pull_policy: always`，执行 `up` 时会从 GHCR 拉取配置的镜像标签。已部署的服务器需先把两处拉取策略同步到自己的 `docker-compose.yml`，然后执行：
+先确认本次 GitHub Actions 的前后端镜像均已发布成功。新版 Compose 的前后端均使用 `:latest` 和 `pull_policy: always`。已部署的服务器需先同步新版 `docker-compose.yml`。使用飞牛 Docker 时，在 Compose 项目中保存新版配置后点「构建」。也可以在终端执行：
 
 ```bash
 cd /vol1/1000/docker/player
@@ -59,7 +59,7 @@ docker compose ps
 docker compose logs --tail=100 backend frontend
 ```
 
-`.env` 的 `IMAGE_TAG` 同时控制前后端版本，默认 `latest`。需要配套部署或回滚时，填写同一次成功构建的完整提交 SHA；回滚应用前另行确认数据库迁移兼容性，不能仅靠切换镜像恢复数据库。
+如需回滚，在 Compose 的两处 `image` 中将 `latest` 改为同一次成功构建的完整提交 SHA。回滚应用前先确认数据库迁移兼容性。
 
 只有服务结构发生变化时才更新 Compose：先下载为 `docker-compose.yml.new`，对照并保留本地定制，备份原文件后再替换；不要重复复制模板覆盖 `.env`。clone 部署先确认本地配置已迁出 Compose，再拉取代码。更新会直接复用现有 SQLite 配置和统计数据，无需重新导入。
 
@@ -69,7 +69,7 @@ docker compose logs --tail=100 backend frontend
 
 配置只有两个入口：部署参数位于 `.env`；业务设置位于 SQLite，通过 `/api/admin/settings/` 分组保存。SMB、任务、分享及运行参数不从环境变量导入，也没有旧混合配置接口。
 
-保留当前 `.env` 的密码、JWT 密钥、端口、镜像标签与数据路径，升级时不要重新复制模板。启动参数修改后通过 `docker compose up -d` 重建对应容器生效；直接运行 Go 后端仍读取进程环境变量。
+保留当前 `.env` 的密码、JWT 密钥、端口与数据路径，升级时不要重新复制模板。启动参数修改后通过 `docker compose up -d` 重建对应容器生效；直接运行 Go 后端仍读取进程环境变量。
 
 `docker-data/` 或 `DATA_DIRECTORY` 指向的目录是持久化数据，不能删除。备份需包含服务器 `.env` 和数据库、CSV；SQLite 使用 WAL，不能在运行时只复制主 `.db` 文件而遗漏尚未检查点的数据。
 

@@ -77,10 +77,10 @@ class ComposeConfigTests(unittest.TestCase):
         self.assertEqual({v["target"] for v in mounts}, {"/data/database", "/data/synced-logs", "/data/temp"})
         self.assertEqual([p["published"] for p in services["frontend"]["ports"]], ["9493", "8843"])
 
-    def test_custom_version_and_data_root(self):
-        services = self.config({"IMAGE_TAG": "fixture-sha", "DATA_DIRECTORY": "./custom-data", "PUBLIC_PORT": "19493", "ADMIN_PORT": "18843"})
+    def test_custom_data_root_and_ports_with_legacy_image_tag(self):
+        services = self.config({"IMAGE_TAG": "obsolete-tag", "DATA_DIRECTORY": "./custom-data", "PUBLIC_PORT": "19493", "ADMIN_PORT": "18843"})
         for name in ["backend", "frontend"]:
-            self.assertTrue(services[name]["image"].endswith(":fixture-sha"))
+            self.assertTrue(services[name]["image"].endswith(":latest"))
         for mount in services["backend"]["volumes"]:
             self.assertTrue(Path(mount["source"]).resolve().is_relative_to((ROOT / "custom-data").resolve()))
         self.assertEqual([p["published"] for p in services["frontend"]["ports"]], ["19493", "18843"])
