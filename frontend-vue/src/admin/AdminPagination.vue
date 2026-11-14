@@ -18,11 +18,13 @@ const sizeOptions = PAGE_SIZE_OPTIONS.map(value => ({ value, label: String(value
   <div class="admin-pagination" role="group" aria-label="日志分页">
     <AdminSelect :model-value="pageSize" :options="sizeOptions" label="每页条数" caption="每页" :disabled="loading" @update:model-value="emit('page-size', $event)" />
     <span class="page-count" :aria-label="`第 ${page} 页，共 ${totalPages} 页`"><span class="current-page">{{ page }}</span><span class="page-divider" aria-hidden="true">/</span><span class="total-pages">{{ totalPages }}</span></span>
-    <button type="button" class="secondary-button sort-toggle" :class="{ 'is-descending': sortOrder === 'desc' }" :disabled="loading" :aria-label="sortOrder === 'desc' ? '时间排序：早的在后' : '时间排序：早的在前'" :aria-pressed="sortOrder === 'desc'" :title="sortOrder === 'desc' ? '早的在后，点击切换为早的在前' : '早的在前，点击切换为早的在后'" @click="emit('order', sortOrder === 'asc' ? 'desc' : 'asc')"><component :is="sortOrder === 'desc' ? ArrowDown : ArrowUp" :size="18" /></button>
-    <button type="button" class="secondary-button" aria-label="第一页" title="第一页" :disabled="loading || page <= 1" @click="emit('page', 1)"><ChevronFirst :size="17" /></button>
-    <button type="button" class="secondary-button" aria-label="上一页" title="上一页" :disabled="loading || page <= 1" @click="emit('page', page - 1)"><ChevronLeft :size="17" /></button>
-    <button type="button" class="secondary-button" aria-label="下一页" title="下一页" :disabled="loading || page >= totalPages" @click="emit('page', page + 1)"><ChevronRight :size="17" /></button>
-    <button type="button" class="secondary-button" aria-label="最后一页" title="最后一页" :disabled="loading || page >= totalPages" @click="emit('page', totalPages)"><ChevronLast :size="17" /></button>
+    <div class="pagination-buttons">
+      <button type="button" class="secondary-button sort-toggle" :class="{ 'is-descending': sortOrder === 'desc' }" :disabled="loading" :aria-label="sortOrder === 'desc' ? '时间排序：早的在后' : '时间排序：早的在前'" :aria-pressed="sortOrder === 'desc'" :title="sortOrder === 'desc' ? '早的在后，点击切换为早的在前' : '早的在前，点击切换为早的在后'" @click="emit('order', sortOrder === 'asc' ? 'desc' : 'asc')"><component :is="sortOrder === 'desc' ? ArrowDown : ArrowUp" :size="18" /></button>
+      <button type="button" class="secondary-button" aria-label="第一页" title="第一页" :disabled="loading || page <= 1" @click="emit('page', 1)"><ChevronFirst :size="17" /></button>
+      <button type="button" class="secondary-button" aria-label="上一页" title="上一页" :disabled="loading || page <= 1" @click="emit('page', page - 1)"><ChevronLeft :size="17" /></button>
+      <button type="button" class="secondary-button" aria-label="下一页" title="下一页" :disabled="loading || page >= totalPages" @click="emit('page', page + 1)"><ChevronRight :size="17" /></button>
+      <button type="button" class="secondary-button" aria-label="最后一页" title="最后一页" :disabled="loading || page >= totalPages" @click="emit('page', totalPages)"><ChevronLast :size="17" /></button>
+    </div>
   </div>
 </template>
 
@@ -35,7 +37,8 @@ const sizeOptions = PAGE_SIZE_OPTIONS.map(value => ({ value, label: String(value
 .current-page { color: #526479; font-weight: 400; }
 .page-divider { color: #a1adbd; font-size: 13px; }
 .total-pages { color: #526479; }
-.admin-pagination > button { display: inline-flex; align-items: center; justify-content: center; min-width: 40px; min-height: 44px; padding: 10px; }
-.admin-pagination > .sort-toggle { margin-right: 8px; }
-.admin-pagination > .sort-toggle.is-descending { color: var(--admin-accent, #465fc9); border-color: var(--admin-accent, #465fc9); background: var(--admin-accent-soft, #edf1ff); }
+.pagination-buttons { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.pagination-buttons > button { width: 44px; min-height: 44px; padding: 0; }
+.pagination-buttons > .sort-toggle.is-descending { color: var(--admin-accent, #465fc9); border-color: var(--admin-accent, #465fc9); background: var(--admin-accent-soft, #edf1ff); }
+@media (max-width: 560px) { .pagination-buttons { gap: 5px; } }
 </style>

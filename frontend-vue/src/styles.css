@@ -858,6 +858,10 @@ body {
     #f5f7fa;
 }
 
+body:has(.admin-workspace) {
+  min-width: 0;
+}
+
 button,
 input {
   font: inherit;
@@ -1503,20 +1507,9 @@ h2 {
   gap: 8px;
 }
 
-.pagination-controls label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.pagination-controls select {
-  height: 38px;
-  border: 1px solid #cfd9e5;
-  border-radius: 7px;
-  padding: 0 10px;
-  background: #fff;
-  color: #17202a;
-  font-weight: 800;
+.pagination-controls > .secondary-button {
+  width: auto;
+  min-height: 44px;
 }
 
 .log-query-actions {
@@ -2618,25 +2611,6 @@ th {
     gap: 8px;
   }
 
-  .pagination-controls {
-    width: 100%;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 42px 42px;
-    gap: 8px;
-  }
-
-  .pagination-controls label {
-    min-width: 0;
-  }
-
-  .pagination-controls select {
-    width: 100%;
-  }
-
-  .pagination-controls .secondary-button {
-    grid-column: 1 / -1;
-  }
-
   .mini-button,
   .xray-expand-row .mini-button {
     width: fit-content;
@@ -3183,9 +3157,6 @@ th {
     border-radius: 8px;
   }
 
-  .pagination-controls {
-    grid-template-columns: minmax(0, 1fr) 40px 40px;
-  }
 }
 
 /* Unified public player report */
